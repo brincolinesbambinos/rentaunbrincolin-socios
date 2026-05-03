@@ -71,7 +71,3 @@ export default async function PartnerPage({ params }: { params: Promise<{ partne
     />
   )
 }
-
-export async function generateStaticParams() {
-  return []
-}
