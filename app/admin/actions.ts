@@ -24,14 +24,15 @@ export async function togglePartnerStatus(id: string, currentStatus: boolean) {
 export async function deletePartner(id: string) {
   const supabase = await createClient()
   
-  // Arch doc toggle indicates NO full delete, "Activar / Desactivar | Toggle sin borrar el registro"
-  // So we will just deactivate.
   const { error } = await supabase
     .from('partners')
-    .update({ active: false })
+    .delete()
     .eq('id', id)
 
-  if (error) return { error: 'Failed' }
+  if (error) {
+    console.error('Delete Error:', error)
+    return { error: `No se pudo eliminar: ${error.message}` }
+  }
   revalidatePath('/admin')
   return { success: true }
 }
@@ -48,9 +49,12 @@ export async function savePartner(formData: FormData) {
     const whatsapp_message = formData.get('whatsapp_message') as string
     const primary_color = formData.get('primary_color') as string
     const secondary_color = formData.get('secondary_color') as string
-    const branch_id = formData.get('branch_id') as string || null
     const branch_ids_json = formData.get('branch_ids_json') as string
     const branch_ids = branch_ids_json ? JSON.parse(branch_ids_json) : []
+    
+    // Fallback: Si no hay branch_id (singular), usamos la primera del array de sucursales
+    // Esto es vital para evitar errores de RLS si la política requiere un branch_id válido.
+    const branch_id = (formData.get('branch_id') as string) || (branch_ids.length > 0 ? branch_ids[0] : null)
 
     let logo_url = undefined
 
