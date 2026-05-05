@@ -9,8 +9,8 @@ export const dynamic = 'force-dynamic'
 export async function generateMetadata(
   { params }: { params: Promise<{ partner: string, branch: string }> }
 ): Promise<Metadata> {
-  const { partner: slug } = await params
-  const partner = await getPartnerBySlug(slug)
+  const { partner: partnerSlug, branch: branchSlug } = await params
+  const partner = await getPartnerBySlug(partnerSlug)
   
   if (!partner) return {}
 
@@ -19,15 +19,14 @@ export async function generateMetadata(
   const logo = partner.logo_url ?? "/og-default.png"
 
   return {
+    metadataBase: new URL('https://www.rentaunbrincolin.com'),
     title,
     description,
-    icons: {
-      icon: logo,
-      apple: logo,
-    },
     openGraph: {
       title,
       description,
+      type: 'website',
+      url: `https://www.rentaunbrincolin.com/${partnerSlug}/${branchSlug}/catalogo`,
       images: [
         {
           url: logo,

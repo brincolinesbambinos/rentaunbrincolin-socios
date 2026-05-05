@@ -3,8 +3,46 @@ import { getPartnerBySlug, getPartnerBranches } from "@/lib/partners"
 import { getAllVisibleProducts } from "@/lib/products"
 import CatalogClient from "./CatalogClient"
 import Link from "next/link"
+import type { Metadata } from "next"
 
 export const dynamic = 'force-dynamic'
+
+export async function generateMetadata({ params }: { params: Promise<{ partner: string }> }): Promise<Metadata> {
+  const { partner: slug } = await params
+  const partner = await getPartnerBySlug(slug)
+  
+  if (!partner) return {}
+
+  const title = `Catálogo - ${partner.name}`
+  const description = `Explora nuestro catálogo de inflables y juegos en ${partner.name}.`
+  const logo = partner.logo_url ?? "/og-default.png"
+
+  return {
+    metadataBase: new URL('https://www.rentaunbrincolin.com'),
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: 'website',
+      url: `https://www.rentaunbrincolin.com/${partner.slug}`,
+      images: [
+        {
+          url: logo,
+          width: 1200,
+          height: 630,
+          alt: partner.name,
+        },
+      ],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [logo],
+    },
+  }
+}
 
 export default async function PartnerRootPage({ params }: { params: Promise<{ partner: string }> }) {
   const { partner: slug } = await params
