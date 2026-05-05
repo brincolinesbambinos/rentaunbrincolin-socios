@@ -68,6 +68,7 @@ export interface Product {
   stock: number
   image_main: string | null
   image_gallery: string[] | null
+  stage?: string[]
   created_at: string
   updated_at: string
 }

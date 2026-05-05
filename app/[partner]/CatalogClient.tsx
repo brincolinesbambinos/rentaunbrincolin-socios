@@ -15,7 +15,8 @@ interface Props {
 }
 
 const CATEGORIES = ["Todos", "Acuático", "Clásico", "Destreza", "Interactivo", "Mecánico", "Personajes", "Princesas", "Variedad"]
-const AGE_GROUPS = ["Todos", "Infantes", "Niños", "Adolescentes", "Adultos"]
+const STAGES = ["Todas", "Infantes", "Niños", "Adolescentes", "Adultos"]
+const SIZES = ["Todas", "Chico", "Mediano", "Grande", "Mega"]
 
 const CAT_COLORS: Record<string, { bg: string; light: string; emoji: string }> = {
   "Acuático":    { bg: "#0EA5E9", light: "#E0F2FE", emoji: "🌊" },
@@ -56,45 +57,41 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
   }
   const [activeCategory, setActiveCategory] = useState("Todos")
   const [maxPrice, setMaxPrice]             = useState(12000)
-  const [activeAge, setActiveAge]           = useState("Todos")
+  const [activeStage, setActiveStage]       = useState("Todas")
+  const [activeSize, setActiveSize]         = useState("Todas")
   const [searchTerm, setSearchTerm]         = useState("")
   const [selected, setSelected]             = useState<Product | null>(null)
 
-  const isFilterActive = activeCategory !== "Todos" || maxPrice < 12000 || activeAge !== "Todos" || searchTerm !== ""
+  const isFilterActive = activeCategory !== "Todos" || maxPrice < 12000 || activeStage !== "Todas" || activeSize !== "Todas" || searchTerm !== ""
 
   const filtered = useMemo(() => products.filter(p => {
     const catName = p.categories?.name || "Variedad"
     const catMatch   = activeCategory === "Todos" || catName === activeCategory
     const priceMatch = getFinalPrice(p) <= maxPrice
+    const sizeMatch  = activeSize === "Todas" || p.size === activeSize
     
     // Filtro por nombre
     const searchMatch = searchTerm === "" || 
       p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
       (p.description ?? "").toLowerCase().includes(searchTerm.toLowerCase())
 
-    // Filtro por edad (mejorado)
-    let ageMatch = activeAge === "Todos"
-    if (!ageMatch) {
-      const tags = (p.custom_tags ?? []).map(t => t.toLowerCase())
+    // Filtro por etapa (usando datos de la API: p.stage)
+    let stageMatch = activeStage === "Todas"
+    if (!stageMatch) {
+      const stages = (p.stage ?? []).map(s => s.toLowerCase())
       const minAge = (p.min_age ?? "").toLowerCase()
-      const targetAge = activeAge.toLowerCase()
+      const targetStage = activeStage.toLowerCase()
       
-      ageMatch = tags.includes(targetAge) || minAge.includes(targetAge)
+      stageMatch = stages.includes(targetStage) || minAge.includes(targetStage)
       
-      // Fallback simple: si dice "todas" o "todos", entra en cualquier categoría
-      if (!ageMatch && (minAge.includes("todas") || minAge.includes("todos"))) {
-        ageMatch = true
-      }
-      
-      // Fallback para Niños si dice "5 años", "8 años", etc.
-      if (!ageMatch && activeAge === "Niños" && minAge.includes("años")) {
-        const years = parseInt(minAge.replace(/\D/g, ""))
-        if (!isNaN(years) && years <= 12) ageMatch = true
+      // Fallback para Niños/Adolescentes basado en texto si no viene en array
+      if (!stageMatch && (minAge.includes("todas") || minAge.includes("todos"))) {
+        stageMatch = true
       }
     }
     
-    return catMatch && priceMatch && ageMatch && searchMatch
-  }), [activeCategory, maxPrice, activeAge, searchTerm, products])
+    return catMatch && priceMatch && stageMatch && sizeMatch && searchMatch
+  }), [activeCategory, maxPrice, activeStage, activeSize, searchTerm, products])
 
   const recommended = selected
     ? products.filter(p => p.id !== selected.id && p.categories?.name === selected.categories?.name).slice(0, 3)
@@ -109,43 +106,47 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       <PartnerPixel pixelId={pixelId} />
 
       {/* ── HEADER ── */}
-      <div style={{ background: partner.primary_color, color: "#fff" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 2rem", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            {partner.logo_url ? (
-              <img src={partner.logo_url} alt={partner.name} style={{ height: 36, objectFit: "contain" }} />
-            ) : (
-              <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(255,255,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, letterSpacing: 1 }}>
-                {partner.name.slice(0, 2).toUpperCase()}
-              </div>
-            )}
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 700 }}>{partner.name}</div>
-              <div style={{ fontSize: 11, opacity: 0.5, letterSpacing: 0.5 }}>Plataforma Oficial</div>
+      <div style={{ 
+        display: "flex", alignItems: "center", justifyContent: "space-between", 
+        padding: "0.8rem 2rem", borderBottom: "1px solid rgba(255,255,255,0.08)",
+        position: "sticky", top: 0, zIndex: 110, background: partner.primary_color,
+        color: "#fff",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.1)"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {partner.logo_url ? (
+            <img src={partner.logo_url} alt={partner.name} style={{ height: 36, objectFit: "contain" }} />
+          ) : (
+            <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(255,255,255,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, letterSpacing: 1 }}>
+              {partner.name.slice(0, 2).toUpperCase()}
             </div>
+          )}
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{partner.name}</div>
+            <div style={{ fontSize: 11, opacity: 0.5, letterSpacing: 0.5 }}>Plataforma Oficial</div>
           </div>
-          <a href={`https://wa.me/${partner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
-             onClick={() => trackEvent('Lead')}
-            style={{ background: partner.secondary_color, color: "#fff", padding: "10px 20px", borderRadius: 50, fontSize: 13, fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
-            💬 Contacto directo
-          </a>
         </div>
+        <a href={`https://wa.me/${partner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
+           onClick={() => trackEvent('Lead')}
+          style={{ background: partner.secondary_color, color: "#fff", padding: "10px 20px", borderRadius: 50, fontSize: 13, fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
+          💬 Contacto directo
+        </a>
+      </div>
 
-        {/* Hero */}
-        <div style={{ textAlign: "center", padding: "3rem 2rem 3.5rem" }}>
-          <div style={{ fontSize: 11, letterSpacing: 3, opacity: 0.4, textTransform: "uppercase", marginBottom: 14 }}>Catálogo de inflables</div>
-          <h1 style={{ fontSize: 44, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.1 }}>Nuestros Inflables</h1>
-          <p style={{ fontSize: 16, opacity: 0.6, margin: 0, maxWidth: 420, marginLeft: "auto", marginRight: "auto" }}>
-            Encuentra el inflable perfecto para tu próximo evento
-          </p>
-          <div style={{ display: "flex", gap: 40, justifyContent: "center", marginTop: 28 }}>
-            {[["Variedad", "de juegos"], ["Calidad", "garantizada"], ["16+", "años de experiencia"]].map(([n, l]) => (
-              <div key={l} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 22, fontWeight: 800 }}>{n}</div>
-                <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{l}</div>
-              </div>
-            ))}
-          </div>
+      {/* Hero */}
+      <div style={{ background: partner.primary_color, color: "#fff", textAlign: "center", padding: "3rem 2rem 3.5rem" }}>
+        <div style={{ fontSize: 11, letterSpacing: 3, opacity: 0.4, textTransform: "uppercase", marginBottom: 14 }}>Catálogo de inflables</div>
+        <h1 style={{ fontSize: 44, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.1 }}>Nuestros Inflables</h1>
+        <p style={{ fontSize: 16, opacity: 0.6, margin: 0, maxWidth: 420, marginLeft: "auto", marginRight: "auto" }}>
+          Encuentra el inflable perfecto para tu próximo evento
+        </p>
+        <div style={{ display: "flex", gap: 40, justifyContent: "center", marginTop: 28 }}>
+          {[["Variedad", "de juegos"], ["Calidad", "garantizada"], ["16+", "años de experiencia"]].map(([n, l]) => (
+            <div key={l} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>{n}</div>
+              <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{l}</div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -158,7 +159,10 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       `}</style>
 
       {/* ── FILTERS ── */}
-      <div style={{ background: "#fff", borderBottom: "1.5px solid #EAE8E0", padding: "1rem 2rem", position: "sticky", top: 0, zIndex: 100 }}>
+      <div style={{ 
+        background: "#fff", borderBottom: "1.5px solid #EAE8E0", 
+        padding: "1rem 2rem", position: "sticky", top: 61, zIndex: 100 
+      }}>
         
         {/* Toggle + Count */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
@@ -189,7 +193,8 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 onClick={() => {
                   setActiveCategory("Todos")
                   setMaxPrice(12000)
-                  setActiveAge("Todos")
+                  setActiveStage("Todas")
+                  setActiveSize("Todas")
                   setSearchTerm("")
                 }}
                 style={{
@@ -238,25 +243,44 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             }}>{cat}</button>
           ))}
         </div>
-        {/* Price + Age */}
-        <div style={{ display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {/* Price + Stage + Size */}
+        <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 200 }}>
             <span style={{ fontSize: 12, color: "#999", whiteSpace: "nowrap" }}>Precio máx:</span>
             <input type="range" min={3000} max={12000} step={500} value={maxPrice}
               onChange={e => setMaxPrice(Number(e.target.value))}
-              style={{ width: 120, accentColor: partner.primary_color }} />
+              style={{ width: "100%", accentColor: partner.primary_color }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: partner.primary_color, minWidth: 64 }}>{fmt(maxPrice)}</span>
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {AGE_GROUPS.map(age => (
-              <button key={age} onClick={() => setActiveAge(age)} style={{
-                padding: "4px 12px", borderRadius: 50, border: "1px solid",
-                borderColor: activeAge === age ? partner.secondary_color : "#E5E3DC",
-                background: activeAge === age ? "#FEF0EB" : "#fff",
-                color: activeAge === age ? partner.secondary_color : "#999",
-                fontSize: 12, cursor: "pointer", fontWeight: activeAge === age ? 600 : 400
-              }}>{age}</button>
-            ))}
+          
+          <div style={{ spaceY: "0.75rem" }}>
+            <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Etapa / Edad</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {STAGES.map(stage => (
+                <button key={stage} onClick={() => setActiveStage(stage)} style={{
+                  padding: "4px 12px", borderRadius: 50, border: "1px solid",
+                  borderColor: activeStage === stage ? partner.secondary_color : "#E5E3DC",
+                  background: activeStage === stage ? "#FEF0EB" : "#fff",
+                  color: activeStage === stage ? partner.secondary_color : "#999",
+                  fontSize: 12, cursor: "pointer", fontWeight: activeStage === stage ? 600 : 400
+                }}>{stage}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ spaceY: "0.75rem" }}>
+            <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Medida</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {SIZES.map(size => (
+                <button key={size} onClick={() => setActiveSize(size)} style={{
+                  padding: "4px 12px", borderRadius: 50, border: "1px solid",
+                  borderColor: activeSize === size ? partner.primary_color : "#E5E3DC",
+                  background: activeSize === size ? "#EEF2FF" : "#fff",
+                  color: activeSize === size ? partner.primary_color : "#999",
+                  fontSize: 12, cursor: "pointer", fontWeight: activeSize === size ? 600 : 400
+                }}>{size}</button>
+              ))}
+            </div>
           </div>
         </div>
         </div>
@@ -403,7 +427,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "5rem 2rem", color: "#bbb" }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
             <p style={{ fontSize: 15 }}>No encontramos inflables con esos filtros.</p>
-            <button onClick={() => { setActiveCategory("Todos"); setMaxPrice(12000); setActiveAge("Todos"); setSearchTerm("") }}
+            <button onClick={() => { setActiveCategory("Todos"); setMaxPrice(12000); setActiveStage("Todas"); setActiveSize("Todas"); setSearchTerm("") }}
               style={{ marginTop: 12, padding: "10px 24px", borderRadius: 50, background: partner.primary_color, color: "#fff", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
               Limpiar filtros
             </button>
