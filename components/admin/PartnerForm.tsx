@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Upload, ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 import { savePartner } from '@/app/admin/actions'
+import { compressImage } from '@/lib/image'
 
 interface PartnerFormProps {
   initialData?: Partner | null
@@ -35,6 +36,19 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
     setError(null)
     
     const formData = new FormData(e.currentTarget)
+    
+    // Compress image if exists
+    const logoFile = formData.get('logo_file') as File | null
+    if (logoFile && logoFile.size > 0) {
+      try {
+        const compressedBlob = await compressImage(logoFile, 800, 800, 0.7)
+        formData.set('logo_file', compressedBlob, logoFile.name)
+      } catch (err) {
+        console.error('Compression error:', err)
+        // Continue with original file if compression fails
+      }
+    }
+
     if (initialData?.id) {
       formData.append('id', initialData.id)
     }
@@ -42,13 +56,15 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
     try {
       const res = await savePartner(formData)
       if (res.error) {
+        console.error('Error saving partner:', res.error)
         setError(res.error)
         setLoading(false)
       } else {
         router.push('/admin')
       }
-    } catch (err) {
-      setError('Error inesperado al guardar el socio.')
+    } catch (err: any) {
+      console.error('Unexpected client-side error:', err)
+      setError(`Error inesperado: ${err.message || 'No se pudo completar la operación'}`)
       setLoading(false)
     }
   }

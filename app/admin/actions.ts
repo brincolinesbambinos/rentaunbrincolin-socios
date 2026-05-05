@@ -37,75 +37,91 @@ export async function deletePartner(id: string) {
 }
 
 export async function savePartner(formData: FormData) {
-  const supabase = await createClient()
-  
-  const id = formData.get('id') as string | null
-  const slug = formData.get('slug') as string
-  const name = formData.get('name') as string
-  const phone = formData.get('phone') as string
-  const whatsapp = formData.get('whatsapp') as string
-  const whatsapp_message = formData.get('whatsapp_message') as string
-  const primary_color = formData.get('primary_color') as string
-  const secondary_color = formData.get('secondary_color') as string
-  const branch_id = formData.get('branch_id') as string || null
-
-  let logo_url = undefined
-
-  const file = formData.get('logo_file') as File | null
-  if (file && file.size > 0) {
-    const fileExt = file.name.split('.').pop()
-    const fileName = `${slug}-${Date.now()}.${fileExt}`
+  try {
+    const supabase = await createClient()
     
-    const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    
-    // Upload image to 'partner-logos' bucket
-    const { error: uploadError } = await supabase
-      .storage
-      .from('partner-logos')
-      .upload(fileName, buffer, {
-        contentType: file.type,
-      })
+    const id = formData.get('id') as string | null
+    const slug = formData.get('slug') as string
+    const name = formData.get('name') as string
+    const phone = formData.get('phone') as string
+    const whatsapp = formData.get('whatsapp') as string
+    const whatsapp_message = formData.get('whatsapp_message') as string
+    const primary_color = formData.get('primary_color') as string
+    const secondary_color = formData.get('secondary_color') as string
+    const branch_id = formData.get('branch_id') as string || null
+
+    let logo_url = undefined
+
+    const file = formData.get('logo_file') as File | null
+    if (file && file.size > 0) {
+      console.log('Uploading file:', file.name, 'size:', file.size)
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${slug}-${Date.now()}.${fileExt}`
       
-    if (uploadError) {
-      console.error('Storage Upload Error:', uploadError)
-      return { error: 'No se pudo subir el logo. Verifica que el bucket "partner-logos" exista y sea público.' }
+      const arrayBuffer = await file.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      
+      // Upload image to 'partner-logos' bucket
+      const { error: uploadError } = await supabase
+        .storage
+        .from('partner-logos')
+        .upload(fileName, buffer, {
+          contentType: file.type,
+          upsert: true
+        })
+        
+      if (uploadError) {
+        console.error('Storage Upload Error:', uploadError)
+        return { error: `No se pudo subir el logo: ${uploadError.message}` }
+      }
+      
+      // Get public URL
+      const { data: publicUrlData } = supabase
+        .storage
+        .from('partner-logos')
+        .getPublicUrl(fileName)
+        
+      logo_url = publicUrlData.publicUrl
+      console.log('Logo URL generated:', logo_url)
     }
-    
-    // Get public URL
-    const { data: publicUrlData } = supabase
-      .storage
-      .from('partner-logos')
-      .getPublicUrl(fileName)
-      
-    logo_url = publicUrlData.publicUrl
-  }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const payload: any = {
-    slug,
-    name,
-    phone,
-    whatsapp,
-    whatsapp_message,
-    primary_color,
-    secondary_color,
-    branch_id,
-    updated_at: new Date().toISOString()
-  }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const payload: any = {
+      slug,
+      name,
+      phone,
+      whatsapp,
+      whatsapp_message,
+      primary_color,
+      secondary_color,
+      branch_id,
+      updated_at: new Date().toISOString()
+    }
 
-  if (logo_url) {
-    payload.logo_url = logo_url
-  }
+    if (logo_url) {
+      payload.logo_url = logo_url
+    }
 
-  if (id) {
-    const { error } = await supabase.from('partners').update(payload).eq('id', id)
-    if (error) return { error: error.message }
-  } else {
-    const { error } = await supabase.from('partners').insert([{ ...payload, active: true }])
-    if (error) return { error: error.message }
-  }
+    console.log('Saving partner with payload:', JSON.stringify(payload, null, 2))
 
-  revalidatePath('/admin')
-  return { success: true }
+    if (id) {
+      const { error } = await supabase.from('partners').update(payload).eq('id', id)
+      if (error) {
+        console.error('Update Error:', error)
+        return { error: `Error al actualizar: ${error.message}` }
+      }
+    } else {
+      const { error } = await supabase.from('partners').insert([{ ...payload, active: true }])
+      if (error) {
+        console.error('Insert Error:', error)
+        return { error: `Error al insertar: ${error.message}` }
+      }
+    }
+
+    revalidatePath('/admin')
+    return { success: true }
+  } catch (err: any) {
+    console.error('Unexpected error in savePartner:', err)
+    return { error: `Error inesperado en el servidor: ${err.message || 'Desconocido'}` }
+  }
 }

@@ -57,18 +57,44 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
   const [activeCategory, setActiveCategory] = useState("Todos")
   const [maxPrice, setMaxPrice]             = useState(12000)
   const [activeAge, setActiveAge]           = useState("Todos")
+  const [searchTerm, setSearchTerm]         = useState("")
   const [selected, setSelected]             = useState<Product | null>(null)
+
+  const isFilterActive = activeCategory !== "Todos" || maxPrice < 12000 || activeAge !== "Todos" || searchTerm !== ""
 
   const filtered = useMemo(() => products.filter(p => {
     const catName = p.categories?.name || "Variedad"
     const catMatch   = activeCategory === "Todos" || catName === activeCategory
     const priceMatch = getFinalPrice(p) <= maxPrice
     
-    // Filtro por tags
-    const ageMatch   = activeAge === "Todos" || (p.custom_tags ?? []).includes(activeAge)
+    // Filtro por nombre
+    const searchMatch = searchTerm === "" || 
+      p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      (p.description ?? "").toLowerCase().includes(searchTerm.toLowerCase())
+
+    // Filtro por edad (mejorado)
+    let ageMatch = activeAge === "Todos"
+    if (!ageMatch) {
+      const tags = (p.custom_tags ?? []).map(t => t.toLowerCase())
+      const minAge = (p.min_age ?? "").toLowerCase()
+      const targetAge = activeAge.toLowerCase()
+      
+      ageMatch = tags.includes(targetAge) || minAge.includes(targetAge)
+      
+      // Fallback simple: si dice "todas" o "todos", entra en cualquier categoría
+      if (!ageMatch && (minAge.includes("todas") || minAge.includes("todos"))) {
+        ageMatch = true
+      }
+      
+      // Fallback para Niños si dice "5 años", "8 años", etc.
+      if (!ageMatch && activeAge === "Niños" && minAge.includes("años")) {
+        const years = parseInt(minAge.replace(/\D/g, ""))
+        if (!isNaN(years) && years <= 12) ageMatch = true
+      }
+    }
     
-    return catMatch && priceMatch && ageMatch
-  }), [activeCategory, maxPrice, activeAge, products])
+    return catMatch && priceMatch && ageMatch && searchMatch
+  }), [activeCategory, maxPrice, activeAge, searchTerm, products])
 
   const recommended = selected
     ? products.filter(p => p.id !== selected.id && p.categories?.name === selected.categories?.name).slice(0, 3)
@@ -135,24 +161,68 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       <div style={{ background: "#fff", borderBottom: "1.5px solid #EAE8E0", padding: "1rem 2rem", position: "sticky", top: 0, zIndex: 100 }}>
         
         {/* Toggle + Count */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#bbb' }}>{filtered.length} inflables</span>
-          <button
-            onClick={() => setFiltersOpen(!filtersOpen)}
-            style={{
-              display: 'none',
-              padding: '8px 16px',
-              borderRadius: 50,
-              border: '1px solid #E5E3DC',
-              background: filtersOpen ? partner.primary_color : '#fff',
-              color: filtersOpen ? '#fff' : '#666',
-              fontSize: 13,
-              cursor: 'pointer',
-            }}
-            className="filter-toggle-btn"
-          >
-            {filtersOpen ? '✕ Cerrar' : '⚙ Filtrar'}
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
+            <span style={{ fontSize: 12, color: '#bbb', whiteSpace: 'nowrap' }}>{filtered.length} inflables</span>
+            <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
+              <input 
+                type="text" 
+                placeholder="Buscar brincolín..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 16px 8px 36px',
+                  borderRadius: 50,
+                  border: '1px solid #E5E3DC',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
+              />
+              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 14 }}>🔍</span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            {isFilterActive && (
+              <button
+                onClick={() => {
+                  setActiveCategory("Todos")
+                  setMaxPrice(12000)
+                  setActiveAge("Todos")
+                  setSearchTerm("")
+                }}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 50,
+                  border: '1px solid #ff4444',
+                  background: '#fff',
+                  color: '#ff4444',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                Limpiar
+              </button>
+            )}
+            <button
+              onClick={() => setFiltersOpen(!filtersOpen)}
+              style={{
+                display: 'none',
+                padding: '8px 16px',
+                borderRadius: 50,
+                border: '1px solid #E5E3DC',
+                background: filtersOpen ? partner.primary_color : '#fff',
+                color: filtersOpen ? '#fff' : '#666',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+              className="filter-toggle-btn"
+            >
+              {filtersOpen ? '✕ Cerrar' : '⚙ Filtrar'}
+            </button>
+          </div>
         </div>
 
         <div className={`filters-panel ${filtersOpen ? 'open' : ''}`}>
@@ -193,7 +263,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       </div>
 
       {/* ── FEATURED ── */}
-      {featured.length > 0 && (
+      {featured.length > 0 && !isFilterActive && (
         <div style={{ padding: '2rem 2rem 0', maxWidth: 1280, margin: '0 auto' }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
             ⭐ Juegos destacados
@@ -333,7 +403,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "5rem 2rem", color: "#bbb" }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
             <p style={{ fontSize: 15 }}>No encontramos inflables con esos filtros.</p>
-            <button onClick={() => { setActiveCategory("Todos"); setMaxPrice(12000); setActiveAge("Todos") }}
+            <button onClick={() => { setActiveCategory("Todos"); setMaxPrice(12000); setActiveAge("Todos"); setSearchTerm("") }}
               style={{ marginTop: 12, padding: "10px 24px", borderRadius: 50, background: partner.primary_color, color: "#fff", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
               Limpiar filtros
             </button>

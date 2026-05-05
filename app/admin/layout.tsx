@@ -2,8 +2,16 @@ import { ReactNode } from 'react'
 import { logout } from './login/actions'
 import { LayoutDashboard, Users, LogOut, Package } from 'lucide-react'
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
 
-export default function AdminLayout({ children }: { children: ReactNode }) {
+export default async function AdminLayout({ children }: { children: ReactNode }) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    redirect('/admin/login')
+  }
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Sidebar */}
