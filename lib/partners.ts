@@ -1,6 +1,6 @@
 import { createClient } from './supabase/server'
 import { createStaticClient } from './supabase/static'
-import { Partner } from '../types'
+import { Partner, Branch } from '../types'
 
 export async function getPartnerBySlug(slug: string): Promise<Partner | null> {
   const supabase = await createClient()
