@@ -3,15 +3,18 @@
 import { useState, useMemo } from "react"
 import { Partner, Product } from "@/types"
 import { buildWhatsAppUrl } from "@/lib/whatsapp"
+import { useRouter } from "next/navigation"
 
 import PartnerPixel from "@/components/PartnerPixel"
+import PartnerGTM from "@/components/PartnerGTM"
 
 interface Props {
   partner: Partner
   products: Product[]
   featured?: Product[]
   pixelId: string | null
-  branchSlug: string | null
+  branchName?: string | null
+  branchSlug?: string | null
 }
 
 const CATEGORIES = ["Todos", "Acuático", "Clásico", "Destreza", "Interactivo", "Mecánico", "Personajes", "Princesas", "Variedad"]
@@ -35,8 +38,10 @@ const getFinalPrice = (product: Product) => {
   return product.price ?? 0
 }
 
-export default function CatalogClient({ partner, products, featured = [], pixelId, branchSlug }: Props) {
+export default function CatalogClient({ partner, products, featured = [], pixelId, branchName, branchSlug }: Props) {
+  const router = useRouter()
   const [filtersOpen, setFiltersOpen] = useState(false)
+  
   async function trackEvent(eventName: string, data?: Record<string, any>) {
     try {
       const ReactPixel = (await import('react-facebook-pixel')).default
@@ -50,17 +55,17 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
         eventName,
         eventSourceUrl: window.location.href,
         branchSlug,
-        currency: partner.branches?.currency ?? 'MXN',
+        currency: 'MXN',
         ...data,
       }),
     }).catch(() => {})
   }
+
   const [activeCategory, setActiveCategory] = useState("Todos")
   const [maxPrice, setMaxPrice]             = useState(12000)
   const [activeStage, setActiveStage]       = useState("Todas")
   const [activeSize, setActiveSize]         = useState("Todas")
   const [searchTerm, setSearchTerm]         = useState("")
-  const [selected, setSelected]             = useState<Product | null>(null)
 
   const isFilterActive = activeCategory !== "Todos" || maxPrice < 12000 || activeStage !== "Todas" || activeSize !== "Todas" || searchTerm !== ""
 
@@ -69,41 +74,44 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
     const catMatch   = activeCategory === "Todos" || catName === activeCategory
     const priceMatch = getFinalPrice(p) <= maxPrice
     const sizeMatch  = activeSize === "Todas" || p.size === activeSize
-    
-    // Filtro por nombre
     const searchMatch = searchTerm === "" || 
       p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
       (p.description ?? "").toLowerCase().includes(searchTerm.toLowerCase())
 
-    // Filtro por etapa (usando datos de la API: p.stage)
     let stageMatch = activeStage === "Todas"
     if (!stageMatch) {
       const stages = (p.stage ?? []).map(s => s.toLowerCase())
       const minAge = (p.min_age ?? "").toLowerCase()
       const targetStage = activeStage.toLowerCase()
-      
       stageMatch = stages.includes(targetStage) || minAge.includes(targetStage)
-      
-      // Fallback para Niños/Adolescentes basado en texto si no viene en array
-      if (!stageMatch && (minAge.includes("todas") || minAge.includes("todos"))) {
-        stageMatch = true
-      }
+      if (!stageMatch && (minAge.includes("todas") || minAge.includes("todos"))) stageMatch = true
     }
-    
     return catMatch && priceMatch && stageMatch && sizeMatch && searchMatch
   }), [activeCategory, maxPrice, activeStage, activeSize, searchTerm, products])
-
-  const recommended = selected
-    ? products.filter(p => p.id !== selected.id && p.categories?.name === selected.categories?.name).slice(0, 3)
-    : []
 
   const cc = (catName: string): { bg: string; light: string; emoji: string } => {
     return CAT_COLORS[catName] || { bg: "#6B7280", light: "#F3F4F6", emoji: "🎪" }
   }
 
+  const handleProductClick = (product: Product) => {
+    trackEvent('ViewContent', { 
+      contentName: product.name, 
+      contentId: product.id, 
+      value: getFinalPrice(product) 
+    })
+    
+    if (branchSlug) {
+      router.push(`/${partner.slug}/${branchSlug}/catalogo/${product.slug}`)
+    } else {
+      // Global fallback if no branch
+      router.push(`/${partner.slug}/catalogo/${product.slug}`)
+    }
+  }
+
   return (
     <div style={{ fontFamily: "system-ui,-apple-system,sans-serif", background: "#F8F7F3", minHeight: "100vh", color: "#1A1A2E" }}>
       <PartnerPixel pixelId={pixelId} />
+      <PartnerGTM gtmId={null} /> {/* GTM is now in branch layout */}
 
       {/* ── HEADER ── */}
       <div style={{ 
@@ -138,216 +146,120 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
         <div style={{ fontSize: 11, letterSpacing: 3, opacity: 0.4, textTransform: "uppercase", marginBottom: 14 }}>Catálogo de inflables</div>
         <h1 style={{ fontSize: 44, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.1 }}>Nuestros Inflables</h1>
         <p style={{ fontSize: 16, opacity: 0.6, margin: 0, maxWidth: 420, marginLeft: "auto", marginRight: "auto" }}>
-          Encuentra el inflable perfecto para tu próximo evento
+          Encuentra el inflable perfecto para tu próximo evento en {branchName || 'nuestras sucursales'}
         </p>
-        <div style={{ display: "flex", gap: 40, justifyContent: "center", marginTop: 28 }}>
-          {[["Variedad", "de juegos"], ["Calidad", "garantizada"], ["16+", "años de experiencia"]].map(([n, l]) => (
-            <div key={l} style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 800 }}>{n}</div>
-              <div style={{ fontSize: 11, opacity: 0.5, marginTop: 2 }}>{l}</div>
-            </div>
-          ))}
-        </div>
       </div>
 
       <style>{`
-        @media (max-width: 768px) {
-          .filter-toggle-btn { display: block !important; }
-          .filters-panel { display: none; padding-top: 12px; }
-          .filters-panel.open { display: block; }
-        }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
 
       {/* ── FILTERS ── */}
       <div style={{ 
         background: "#fff", borderBottom: "1.5px solid #EAE8E0", 
-        padding: "1rem 2rem", position: "sticky", top: 61, zIndex: 100 
+        padding: "1.25rem 2rem", position: "sticky", top: 61, zIndex: 100 
       }}>
-        
-        {/* Toggle + Count */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
-            <span style={{ fontSize: 12, color: '#bbb', whiteSpace: 'nowrap' }}>{filtered.length} inflables</span>
-            <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
-              <input 
-                type="text" 
-                placeholder="Buscar brincolín..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px 16px 8px 36px',
-                  borderRadius: 50,
-                  border: '1px solid #E5E3DC',
-                  fontSize: 13,
-                  outline: 'none',
-                }}
-              />
-              <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 14 }}>🔍</span>
-            </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+          <div style={{ position: 'relative', flex: 1, maxWidth: 500 }}>
+            <input 
+              type="text" 
+              placeholder="Buscar por nombre o descripción..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%', padding: '12px 16px 12px 42px', borderRadius: 14,
+                border: '1.5px solid #E5E3DC', fontSize: 14, outline: 'none',
+                background: '#F9F8F4', transition: 'all 0.2s'
+              }}
+            />
+            <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 18, opacity: 0.4 }}>🔍</span>
           </div>
 
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 10 }}>
             {isFilterActive && (
               <button
                 onClick={() => {
-                  setActiveCategory("Todos")
-                  setMaxPrice(12000)
-                  setActiveStage("Todas")
-                  setActiveSize("Todas")
-                  setSearchTerm("")
+                  setActiveCategory("Todos"); setMaxPrice(12000); setActiveStage("Todas"); setActiveSize("Todas"); setSearchTerm("")
                 }}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 50,
-                  border: '1px solid #ff4444',
-                  background: '#fff',
-                  color: '#ff4444',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                  fontWeight: 600
-                }}
+                style={{ padding: '10px 20px', borderRadius: 12, border: 'none', background: '#FFF1F1', color: '#FF4444', fontSize: 13, cursor: 'pointer', fontWeight: 700 }}
               >
-                Limpiar
+                Limpiar todo
               </button>
             )}
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
               style={{
-                display: 'none',
-                padding: '8px 16px',
-                borderRadius: 50,
-                border: '1px solid #E5E3DC',
+                padding: '10px 20px', borderRadius: 12, border: '1.5px solid #E5E3DC',
                 background: filtersOpen ? partner.primary_color : '#fff',
                 color: filtersOpen ? '#fff' : '#666',
-                fontSize: 13,
-                cursor: 'pointer',
+                fontSize: 13, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8
               }}
-              className="filter-toggle-btn"
             >
-              {filtersOpen ? '✕ Cerrar' : '⚙ Filtrar'}
+              {filtersOpen ? '✕ Ocultar' : '⚙️ Más Filtros'}
             </button>
           </div>
         </div>
 
-        <div className={`filters-panel ${filtersOpen ? 'open' : ''}`}>
-          {/* Category pills */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          {CATEGORIES.map(cat => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} style={{
-              padding: "6px 16px", borderRadius: 50, border: "1.5px solid",
-              borderColor: activeCategory === cat ? partner.primary_color : "#E5E3DC",
-              background: activeCategory === cat ? partner.primary_color : "#fff",
-              color: activeCategory === cat ? "#fff" : "#666",
-              fontSize: 13, fontWeight: 500, cursor: "pointer",
-            }}>{cat}</button>
-          ))}
+        <div style={{ 
+          display: "flex", gap: 8, overflowX: "auto", padding: "4px 0 12px"
+        }} className="hide-scrollbar">
+          {CATEGORIES.map(cat => {
+            const colors = cc(cat)
+            const isActive = activeCategory === cat
+            return (
+              <button 
+                key={cat} 
+                onClick={() => setActiveCategory(cat)} 
+                style={{
+                  padding: "10px 20px", borderRadius: 16, border: "none",
+                  background: isActive ? colors.bg : colors.light,
+                  color: isActive ? "#fff" : colors.bg,
+                  fontSize: 14, fontWeight: 700, cursor: "pointer",
+                  whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 8,
+                  transition: "all 0.2s",
+                  boxShadow: isActive ? `0 4px 12px ${colors.bg}44` : "none",
+                  transform: isActive ? "scale(1.05)" : "scale(1)"
+                }}
+              >
+                <span style={{ fontSize: 18 }}>{colors.emoji}</span>
+                {cat}
+              </button>
+            )
+          })}
         </div>
-        {/* Price + Stage + Size */}
-        <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 200 }}>
-            <span style={{ fontSize: 12, color: "#999", whiteSpace: "nowrap" }}>Precio máx:</span>
-            <input type="range" min={3000} max={12000} step={500} value={maxPrice}
-              onChange={e => setMaxPrice(Number(e.target.value))}
-              style={{ width: "100%", accentColor: partner.primary_color }} />
-            <span style={{ fontSize: 13, fontWeight: 700, color: partner.primary_color, minWidth: 64 }}>{fmt(maxPrice)}</span>
-          </div>
-          
-          <div style={{ spaceY: "0.75rem" }}>
-            <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Etapa / Edad</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {STAGES.map(stage => (
-                <button key={stage} onClick={() => setActiveStage(stage)} style={{
-                  padding: "4px 12px", borderRadius: 50, border: "1px solid",
-                  borderColor: activeStage === stage ? partner.secondary_color : "#E5E3DC",
-                  background: activeStage === stage ? "#FEF0EB" : "#fff",
-                  color: activeStage === stage ? partner.secondary_color : "#999",
-                  fontSize: 12, cursor: "pointer", fontWeight: activeStage === stage ? 600 : 400
-                }}>{stage}</button>
-              ))}
-            </div>
-          </div>
 
-          <div style={{ spaceY: "0.75rem" }}>
-            <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Medida</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {SIZES.map(size => (
-                <button key={size} onClick={() => setActiveSize(size)} style={{
-                  padding: "4px 12px", borderRadius: 50, border: "1px solid",
-                  borderColor: activeSize === size ? partner.primary_color : "#E5E3DC",
-                  background: activeSize === size ? "#EEF2FF" : "#fff",
-                  color: activeSize === size ? partner.primary_color : "#999",
-                  fontSize: 12, cursor: "pointer", fontWeight: activeSize === size ? 600 : 400
-                }}>{size}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-        </div>
-      </div>
-
-      {/* ── FEATURED ── */}
-      {featured.length > 0 && !isFilterActive && (
-        <div style={{ padding: '2rem 2rem 0', maxWidth: 1280, margin: '0 auto' }}>
-          <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
-            ⭐ Juegos destacados
-          </h2>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
-            gap: 20,
-            marginBottom: 40
+        {filtersOpen && (
+          <div style={{ 
+            marginTop: 20, paddingTop: 20, borderTop: '1px dashed #E5E3DC',
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 24
           }}>
-            {featured.map(product => {
-              const catName = product.categories?.name || "Variedad"
-              const c = cc(catName)
-              const price = getFinalPrice(product)
-              
-              return (
-                <div key={product.id}
-                  style={{ background: "#fff", borderRadius: 18, overflow: "hidden", cursor: "pointer", border: "1px solid #EAE8E0", transition: "transform 0.15s" }}
-                  onClick={() => {
-                    setSelected(product)
-                    trackEvent('ViewContent', { contentName: product.name, contentId: product.id, value: price })
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.transform = "translateY(-4px)"}
-                  onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
-                >
-                  <div style={{ background: c.light, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" }}>
-                    {product.image_main ? (
-                      <img src={product.image_main} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    ) : (
-                      <>
-                        <div style={{ fontSize: 56 }}>{c.emoji}</div>
-                        <div style={{ fontSize: 11, color: c.bg, fontWeight: 600, marginTop: 6, opacity: 0.7 }}>{product.size || "—"}</div>
-                      </>
-                    )}
-                    {product.popular && <div style={{ position: "absolute", top: 12, left: 12, background: partner.secondary_color, color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 50 }}>⭐ POPULAR</div>}
-                    {product.needs_operator && <div style={{ position: "absolute", top: 12, right: 12, background: partner.primary_color, color: "#fff", fontSize: 10, padding: "4px 10px", borderRadius: 50 }}>Con operador</div>}
-                  </div>
-                  <div style={{ padding: "1rem 1.1rem 1.2rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-                      <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>{product.name}</h3>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: partner.primary_color, whiteSpace: "nowrap" }}>{fmt(price)}</span>
-                    </div>
-                    <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 50, background: c.light, color: c.bg, fontWeight: 600 }}>{catName}</span>
-                    </div>
-                    <p style={{ fontSize: 12, color: "#999", margin: "0 0 14px", lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{product.description}</p>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button onClick={e => { e.stopPropagation(); setSelected(product) }}
-                        style={{ padding: "10px 14px", borderRadius: 10, background: partner.primary_color, cursor: "pointer", fontSize: 12, color: "#fff", width: "100%", border: "none", fontWeight: 700 }}>
-                        Ver detalles →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+            <div>
+              <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Precio Máximo</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <input type="range" min={3000} max={12000} step={500} value={maxPrice}
+                  onChange={e => setMaxPrice(Number(e.target.value))}
+                  style={{ flex: 1, accentColor: partner.primary_color }} />
+                <span style={{ fontSize: 14, fontWeight: 800, color: partner.primary_color, minWidth: 70 }}>{fmt(maxPrice)}</span>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Etapa / Edad</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {STAGES.map(stage => (
+                  <button key={stage} onClick={() => setActiveStage(stage)} style={{
+                    padding: "6px 14px", borderRadius: 10, border: "1.5px solid",
+                    borderColor: activeStage === stage ? partner.secondary_color : "#E5E3DC",
+                    background: activeStage === stage ? "#FFF5F2" : "#fff",
+                    color: activeStage === stage ? partner.secondary_color : "#888",
+                    fontSize: 12, cursor: "pointer", fontWeight: 700, transition: "all 0.2s"
+                  }}>{stage}</button>
+                ))}
+              </div>
+            </div>
           </div>
-          <hr style={{ border: 'none', borderTop: '1px solid #EAE8E0', marginBottom: 32 }} />
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ── PRODUCT GRID ── */}
       <div style={{ padding: "2rem", display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 20, maxWidth: 1280, margin: "0 auto" }}>
@@ -359,40 +271,21 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           return (
             <div key={product.id}
               style={{ background: "#fff", borderRadius: 18, overflow: "hidden", cursor: "pointer", border: "1px solid #EAE8E0", transition: "transform 0.15s" }}
-              onClick={() => {
-                setSelected(product)
-                trackEvent('ViewContent', {
-                  contentName: product.name,
-                  contentId: product.id,
-                  contentCategory: product.categories?.name,
-                  value: price,
-                })
-              }}
+              onClick={() => handleProductClick(product)}
               onMouseEnter={e => e.currentTarget.style.transform = "translateY(-4px)"}
               onMouseLeave={e => e.currentTarget.style.transform = "translateY(0)"}
             >
-              {/* Image placeholder */}
               <div style={{ background: c.light, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" }}>
                 {product.image_main ? (
-                  <img
-                    src={product.image_main}
-                    alt={product.name}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
+                  <img src={product.image_main} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 ) : (
                   <>
                     <div style={{ fontSize: 56 }}>{c.emoji}</div>
                     <div style={{ fontSize: 11, color: c.bg, fontWeight: 600, marginTop: 6, opacity: 0.7 }}>{product.size || "—"}</div>
                   </>
                 )}
-                {product.popular && (
-                  <div style={{ position: "absolute", top: 12, left: 12, background: partner.secondary_color, color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 50 }}>⭐ POPULAR</div>
-                )}
-                {product.needs_operator && (
-                  <div style={{ position: "absolute", top: 12, right: 12, background: partner.primary_color, color: "#fff", fontSize: 10, padding: "4px 10px", borderRadius: 50 }}>Con operador</div>
-                )}
+                {product.popular && <div style={{ position: "absolute", top: 12, left: 12, background: partner.secondary_color, color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 50 }}>⭐ POPULAR</div>}
               </div>
-              {/* Content */}
               <div style={{ padding: "1rem 1.1rem 1.2rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>{product.name}</h3>
@@ -400,12 +293,10 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 </div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 50, background: c.light, color: c.bg, fontWeight: 600 }}>{catName}</span>
-                  <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 50, background: "#F3F2EE", color: "#777" }}>🎂 {product.min_age || "Todas"}</span>
-                  <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 50, background: "#F3F2EE", color: "#777" }}>👥 {product.capacity || "—"}</span>
                 </div>
-                <p style={{ fontSize: 12, color: "#999", margin: "0 0 14px", lineHeight: 1.6 }}>{product.description}</p>
+                <p style={{ fontSize: 12, color: "#999", margin: "0 0 14px", lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{product.description}</p>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <a href={buildWhatsAppUrl(partner, product.name)} target="_blank" rel="noopener noreferrer" 
+                  <a href={buildWhatsAppUrl(partner, product.name, branchName || undefined)} target="_blank" rel="noopener noreferrer" 
                     onClick={e => {
                       e.stopPropagation();
                       trackEvent('Contact', { contentName: product.name, contentId: product.id })
@@ -413,7 +304,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                     style={{ flex: 1, background: partner.primary_color, color: "#fff", padding: "10px 0", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none", textAlign: "center" }}>
                     💬 Consultar
                   </a>
-                  <button onClick={e => { e.stopPropagation(); setSelected(product) }}
+                  <button onClick={e => { e.stopPropagation(); handleProductClick(product) }}
                     style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid #E5E3DC", background: "#fff", cursor: "pointer", fontSize: 12, color: "#666" }}>
                     Ver más →
                   </button>
@@ -422,124 +313,12 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             </div>
           )
         })}
-
-        {filtered.length === 0 && (
-          <div style={{ gridColumn: "1/-1", textAlign: "center", padding: "5rem 2rem", color: "#bbb" }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
-            <p style={{ fontSize: 15 }}>No encontramos inflables con esos filtros.</p>
-            <button onClick={() => { setActiveCategory("Todos"); setMaxPrice(12000); setActiveStage("Todas"); setActiveSize("Todas"); setSearchTerm("") }}
-              style={{ marginTop: 12, padding: "10px 24px", borderRadius: 50, background: partner.primary_color, color: "#fff", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-              Limpiar filtros
-            </button>
-          </div>
-        )}
       </div>
 
       {/* ── FOOTER ── */}
       <div style={{ background: partner.primary_color, color: "rgba(255,255,255,0.4)", textAlign: "center", padding: "1.5rem", fontSize: 12, marginTop: "2rem" }}>
         Catálogo con tecnología de <strong style={{ color: "rgba(255,255,255,0.6)" }}>Brincolines Bambinos</strong>
-        <div style={{ marginTop: 12, fontSize: 10, opacity: 0.8 }}>
-          Sitio web creado por <a href="https://bipbopdev.com" target="_blank" rel="noopener noreferrer" style={{ color: "rgba(255,255,255,0.8)", textDecoration: "underline" }}>BipBopDev</a>
-        </div>
       </div>
-
-      {/* ── DETAIL PANEL ── */}
-      {selected && (() => {
-        const p = selected
-        const catName = p.categories?.name || "Variedad"
-        const c = cc(catName)
-        const price = getFinalPrice(p)
-        return (
-          <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex" }}>
-            <div onClick={() => setSelected(null)} style={{ flex: 1, background: "rgba(0,0,0,0.5)" }} />
-            <div style={{ width: 460, background: "#fff", overflowY: "auto", display: "flex", flexDirection: "column", animation: "slideIn 0.2s ease" }}>
-              <style>{`@keyframes slideIn { from { transform: translateX(100%) } to { transform: translateX(0) } }`}</style>
-
-              {/* Panel hero */}
-              <div style={{ background: c.light, padding: "2rem 1.5rem 1.5rem", position: "relative" }}>
-                <button onClick={() => setSelected(null)}
-                  style={{ position: "absolute", top: 16, right: 16, background: "rgba(0,0,0,0.1)", border: "none", borderRadius: 50, width: 34, height: 34, cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>✕</button>
-                
-                {p.image_main ? (
-                  <div style={{ width: "100%", height: 220, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "flex-start" }}>
-                    <img src={p.image_main} alt={p.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 12 }} />
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 64, marginBottom: 14 }}>{c.emoji}</div>
-                )}
-
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                  <span style={{ fontSize: 11, padding: "4px 12px", borderRadius: 50, background: c.bg, color: "#fff", fontWeight: 600 }}>{catName}</span>
-                  {p.popular && <span style={{ fontSize: 11, padding: "4px 12px", borderRadius: 50, background: partner.secondary_color, color: "#fff", fontWeight: 600 }}>⭐ Popular</span>}
-                  {p.needs_operator && <span style={{ fontSize: 11, padding: "4px 12px", borderRadius: 50, background: partner.primary_color, color: "#fff" }}>Con operador</span>}
-                </div>
-                <h2 style={{ fontSize: 24, fontWeight: 800, margin: "0 0 6px", lineHeight: 1.2 }}>{p.name}</h2>
-                <div style={{ fontSize: 28, fontWeight: 800, color: partner.primary_color }}>{fmt(price)}</div>
-              </div>
-
-              {/* Description + specs */}
-              <div style={{ padding: "1.5rem", flex: 1 }}>
-                <p style={{ fontSize: 14, color: "#555", lineHeight: 1.75, marginBottom: 20 }}>{p.description_extended || p.description}</p>
-
-                <div style={{ background: "#F8F7F3", borderRadius: 14, padding: "1.1rem 1.2rem", marginBottom: 24 }}>
-                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, color: "#aaa", textTransform: "uppercase", marginBottom: 14 }}>Especificaciones</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-                    {[
-                      ["📐 Tamaño", p.size || "—"],
-                      ["👥 Capacidad", p.capacity || "—"],
-                      ["🎂 Edad mínima", p.min_age || "Todas"],
-                      ["👷 Operador", p.needs_operator ? "Incluido" : "No requiere"],
-                    ].map(([label, val]) => (
-                      <div key={label}>
-                        <div style={{ fontSize: 11, color: "#aaa", marginBottom: 3 }}>{label}</div>
-                        <div style={{ fontSize: 13, fontWeight: 700 }}>{val}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <a href={buildWhatsAppUrl(partner, p.name)} target="_blank" rel="noopener noreferrer" 
-                   onClick={() => trackEvent('Contact', { contentName: p.name, contentId: p.id })}
-                   style={{
-                  display: "block", background: partner.primary_color, color: "#fff",
-                  padding: "15px", borderRadius: 14, textAlign: "center",
-                  fontWeight: 700, fontSize: 15, textDecoration: "none", marginBottom: 10
-                }}>💬 Consultar disponibilidad</a>
-                <p style={{ fontSize: 11, color: "#ccc", textAlign: "center", margin: 0 }}>Se abrirá WhatsApp con un mensaje pre-llenado</p>
-              </div>
-
-              {/* Recommended */}
-              {recommended.length > 0 && (
-                <div style={{ padding: "0 1.5rem 2rem" }}>
-                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, color: "#aaa", textTransform: "uppercase", marginBottom: 14 }}>También te puede interesar</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {recommended.map(r => {
-                      const rc = cc(r.categories?.name || "Variedad")
-                      return (
-                        <div key={r.id} onClick={() => setSelected(r)}
-                          style={{ display: "flex", gap: 12, padding: "12px 14px", background: "#F8F7F3", borderRadius: 14, cursor: "pointer", alignItems: "center" }}>
-                          <div style={{ width: 48, height: 48, borderRadius: 12, background: rc.light, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0, overflow: "hidden" }}>
-                            {r.image_main ? (
-                              <img src={r.image_main} alt={r.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                            ) : (
-                              rc.emoji
-                            )}
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
-                            <div style={{ fontSize: 12, color: partner.primary_color, fontWeight: 700, marginTop: 2 }}>{fmt(getFinalPrice(r))}</div>
-                          </div>
-                          <span style={{ color: "#ccc", fontSize: 20 }}>›</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      })()}
     </div>
   )
 }

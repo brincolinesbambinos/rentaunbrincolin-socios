@@ -49,6 +49,8 @@ export async function savePartner(formData: FormData) {
     const primary_color = formData.get('primary_color') as string
     const secondary_color = formData.get('secondary_color') as string
     const branch_id = formData.get('branch_id') as string || null
+    const branch_ids_json = formData.get('branch_ids_json') as string
+    const branch_ids = branch_ids_json ? JSON.parse(branch_ids_json) : []
 
     let logo_url = undefined
 
@@ -95,6 +97,7 @@ export async function savePartner(formData: FormData) {
       primary_color,
       secondary_color,
       branch_id,
+      branch_ids,
       updated_at: new Date().toISOString()
     }
 

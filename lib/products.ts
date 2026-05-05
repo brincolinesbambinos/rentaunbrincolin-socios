@@ -146,3 +146,36 @@ export async function getFeaturedProducts(branchId: string, limit: number = 6): 
     return []
   }
 }
+
+export async function getProductBySlug(slug: string, branchId: string): Promise<Product | null> {
+  try {
+    const product = await apiFetch<Product>(`/products/${slug}`, { branch_id: branchId })
+    if (product && product.visible !== false) return product
+  } catch (error) {
+    // continuar a fallback
+  }
+
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from('products')
+      .select(`
+        id, name, slug, description, description_extended,
+        price, size, width_m, length_m, height_m, diameter_m,
+        capacity, min_age, needs_operator, rental_duration, material,
+        party_types, custom_tags, stage,
+        image_main, image_gallery, popular, visible,
+        category_id, branch_id,
+        categories ( id, name, slug )
+      `)
+      .eq('slug', slug)
+      .eq('branch_id', branchId)
+      .eq('visible', true)
+      .maybeSingle()
+
+    if (error || !data) return null
+    return data as unknown as Product
+  } catch (err) {
+    return null
+  }
+}

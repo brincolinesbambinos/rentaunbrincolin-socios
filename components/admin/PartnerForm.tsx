@@ -20,6 +20,10 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
   const [previewLogo, setPreviewLogo] = useState<string | null>(initialData?.logo_url || null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>(
+    initialData?.branch_ids ?? (initialData?.branch_id ? [initialData.branch_id] : [])
+  )
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -30,12 +34,25 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
     }
   }
 
+  const toggleBranch = (id: string) => {
+    if (id === "") {
+      setSelectedBranchIds([])
+    } else {
+      setSelectedBranchIds(prev => 
+        prev.includes(id) ? prev.filter(b => b !== id) : [...prev, id]
+      )
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setLoading(true)
     setError(null)
     
     const formData = new FormData(e.currentTarget)
+    
+    // Send branch_ids as JSON
+    formData.append('branch_ids_json', JSON.stringify(selectedBranchIds))
     
     // Compress image if exists
     const logoFile = formData.get('logo_file') as File | null
@@ -45,7 +62,6 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
         formData.set('logo_file', compressedBlob, logoFile.name)
       } catch (err) {
         console.error('Compression error:', err)
-        // Continue with original file if compression fails
       }
     }
 
@@ -170,19 +186,19 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
             defaultValue={initialData?.whatsapp_message || 'Hola, me interesa rentar el {producto} para mi evento. ¿Me pueden dar información?'} 
             className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none" 
           />
-          <p className="text-xs text-gray-500">Usa la etiqueta <strong className="text-indigo-600 font-mono">{"{producto}"}</strong> para que se reemplace auto-mágicamente por el nombre del inflable.</p>
+          <p className="text-xs text-gray-500">Usa las etiquetas <strong className="text-indigo-600 font-mono">{"{producto}"}</strong> para el nombre del inflable y <strong className="text-indigo-600 font-mono">{"{sucursal}"}</strong> para el nombre de la sucursal activa.</p>
         </div>
 
         <div className="space-y-4 pt-4 border-t border-gray-100">
           <div>
-            <label className="block text-base font-semibold text-gray-900">Sucursal Asignada</label>
-            <p className="text-sm text-gray-500 mt-1">Selecciona a qué inventario estará atado este catálogo de White-Label. Si seleccionas Global, ofrecerá todos los productos.</p>
+            <label className="block text-base font-semibold text-gray-900">Sucursales Asignadas</label>
+            <p className="text-sm text-gray-500 mt-1">Selecciona a qué inventarios estará atado este catálogo. Si seleccionas varias, el usuario podrá elegir sucursal.</p>
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             {/* Global Option */}
-            <label className="relative flex cursor-pointer rounded-xl border bg-white p-4 shadow-sm focus:outline-none has-[:checked]:border-indigo-600 has-[:checked]:ring-1 has-[:checked]:ring-indigo-600 transition-colors border-gray-200 hover:bg-gray-50">
-              <input type="radio" name="branch_id" value="" defaultChecked={!initialData?.branch_id} className="sr-only" />
+            <label className={`relative flex cursor-pointer rounded-xl border p-4 shadow-sm focus:outline-none transition-colors ${selectedBranchIds.length === 0 ? 'border-indigo-600 ring-1 ring-indigo-600 bg-indigo-50/30' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={selectedBranchIds.length === 0} onChange={() => toggleBranch("")} className="sr-only" />
               <span className="flex flex-col">
                 <span className="block text-sm font-semibold text-gray-900">Catálogo Global</span>
                 <span className="mt-1 flex items-center text-xs text-gray-500">Todos los productos</span>
@@ -190,15 +206,18 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
             </label>
 
             {/* Dynamic Branch Options */}
-            {branches.map(branch => (
-              <label key={branch.id} className="relative flex cursor-pointer rounded-xl border bg-white p-4 shadow-sm focus:outline-none has-[:checked]:border-indigo-600 has-[:checked]:ring-1 has-[:checked]:ring-indigo-600 transition-colors border-gray-200 hover:bg-gray-50">
-                <input type="radio" name="branch_id" value={branch.id} defaultChecked={initialData?.branch_id === branch.id} className="sr-only" />
-                <span className="flex flex-col">
-                  <span className="block text-sm font-semibold text-gray-900">{branch.name}</span>
-                  <span className="mt-1 flex items-center text-xs text-gray-500 font-mono truncate" title={branch.id}>{branch.id.split('-')[0]}...</span>
-                </span>
-              </label>
-            ))}
+            {branches.map(branch => {
+              const isSelected = selectedBranchIds.includes(branch.id)
+              return (
+                <label key={branch.id} className={`relative flex cursor-pointer rounded-xl border p-4 shadow-sm focus:outline-none transition-colors ${isSelected ? 'border-indigo-600 ring-1 ring-indigo-600 bg-indigo-50/30' : 'border-gray-200 bg-white hover:bg-gray-50'}`}>
+                  <input type="checkbox" checked={isSelected} onChange={() => toggleBranch(branch.id)} className="sr-only" />
+                  <span className="flex flex-col">
+                    <span className="block text-sm font-semibold text-gray-900">{branch.name}</span>
+                    <span className="mt-1 flex items-center text-xs text-gray-500 font-mono truncate" title={branch.id}>{branch.id.split('-')[0]}...</span>
+                  </span>
+                </label>
+              )
+            })}
           </div>
         </div>
 

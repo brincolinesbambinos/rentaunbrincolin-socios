@@ -12,6 +12,21 @@ export interface Branch {
   name: string
   slug: string
   meta_pixel_id: string | null
+  gtm_id: string | null
+  ga_measurement_id: string | null
+  whatsapp_display: string | null
+  instagram: string | null
+  facebook: string | null
+  tiktok: string | null
+  tracking?: {
+    meta_pixel_id: string | null
+    gtm_id: string | null
+    ga_measurement_id: string | null
+  }
+  contact?: {
+    whatsapp: string | null
+    instagram: string | null
+  }
   currency: string
   locale: string
 }
@@ -28,6 +43,7 @@ export interface Partner {
   primary_color: string
   secondary_color: string
   branch_id: string | null
+  branch_ids: string[]
   branches: Branch | null
   active: boolean
   created_at: string
