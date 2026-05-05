@@ -1,8 +1,8 @@
 'use client'
 
 import { Partner } from '@/types'
-import { Link2, MoreVertical, Edit2, Archive, ArchiveRestore } from 'lucide-react'
-import { togglePartnerStatus } from '@/app/admin/actions'
+import { Link2, Edit2, Archive, ArchiveRestore, Trash2 } from 'lucide-react'
+import { togglePartnerStatus, deletePartner } from '@/app/admin/actions'
 import { useState } from 'react'
 import Link from 'next/link'
 
@@ -12,13 +12,24 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
   const handleCopyLink = (slug: string) => {
     const url = `${window.location.origin}/${slug}`
     navigator.clipboard.writeText(url)
-    // Could add a toast here
     alert('URL copiada al portapapeles: ' + url)
   }
 
   const handleToggle = async (id: string, currentStatus: boolean) => {
     setLoadingId(id)
     await togglePartnerStatus(id, currentStatus)
+    setLoadingId(null)
+  }
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`¿Estás seguro de que deseas ELIMINAR a "${name}"? Esta acción no se puede deshacer.`)) {
+      return
+    }
+    setLoadingId(id)
+    const res = await deletePartner(id)
+    if (res.error) {
+      alert(res.error)
+    }
     setLoadingId(null)
   }
 
@@ -38,7 +49,7 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
           <tr>
             <th className="px-6 py-4 font-semibold">Socio</th>
             <th className="px-6 py-4 font-semibold">URL Slug</th>
-            <th className="px-6 py-4 font-semibold">Sucursal (Branch)</th>
+            <th className="px-6 py-4 font-semibold">Sucursales</th>
             <th className="px-6 py-4 font-semibold">Estado</th>
             <th className="px-6 py-4 font-semibold text-right">Acciones</th>
           </tr>
@@ -49,7 +60,7 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
               <td className="px-6 py-4">
                 <div className="flex items-center gap-3">
                   {p.logo_url ? (
-                    <img src={p.logo_url} className="w-8 h-8 rounded-full border border-gray-200 object-cover" />
+                    <img src={p.logo_url} className="w-8 h-8 rounded-full border border-gray-200 object-cover" alt="" />
                   ) : (
                     <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-xs" style={{ backgroundColor: p.primary_color }}>
                       {p.name.charAt(0)}
@@ -59,7 +70,11 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
                 </div>
               </td>
               <td className="px-6 py-4 text-gray-500 font-mono text-xs">{p.slug}</td>
-              <td className="px-6 py-4 text-gray-500">{p.branch_id ? <span className="font-mono text-xs truncate max-w-[120px] inline-block" title={p.branch_id}>{p.branch_id}</span> : 'Global'}</td>
+              <td className="px-6 py-4 text-gray-500">
+                <span className="text-xs">
+                  {p.branch_ids?.length || (p.branch_id ? 1 : 0)} sucursales
+                </span>
+              </td>
               <td className="px-6 py-4">
                 <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${
                   p.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
@@ -90,6 +105,14 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
                     title={p.active ? 'Desactivar catálogo' : 'Activar catálogo'}
                   >
                     {p.active ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
+                  </button>
+                  <button 
+                    onClick={() => handleDelete(p.id, p.name)}
+                    disabled={loadingId === p.id}
+                    className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                    title="Eliminar socio"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </td>

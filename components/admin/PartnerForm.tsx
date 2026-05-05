@@ -5,8 +5,9 @@ import { Partner } from '@/types'
 import { useRouter } from 'next/navigation'
 import { Upload, ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
-import { savePartner } from '@/app/admin/actions'
+import { savePartner, deletePartner } from '@/app/admin/actions'
 import { compressImage } from '@/lib/image'
+import { Trash2 } from 'lucide-react'
 
 interface PartnerFormProps {
   initialData?: Partner | null
@@ -41,6 +42,22 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
       setSelectedBranchIds(prev => 
         prev.includes(id) ? prev.filter(b => b !== id) : [...prev, id]
       )
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!initialData?.id) return
+    if (!confirm(`¿Estás seguro de que deseas ELIMINAR a "${initialData.name}"? Esta acción no se puede deshacer.`)) {
+      return
+    }
+    
+    setLoading(true)
+    const res = await deletePartner(initialData.id)
+    if (res.error) {
+      alert(res.error)
+      setLoading(false)
+    } else {
+      router.push('/admin')
     }
   }
 
@@ -86,7 +103,7 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto pb-20">
       <div className="flex items-center gap-4 mb-6">
         <Link href="/admin" className="p-2 bg-white border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-gray-900 transition-colors">
           <ArrowLeft className="w-5 h-5" />
@@ -221,7 +238,19 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
           </div>
         </div>
 
-        <div className="pt-4 flex items-center justify-end border-t border-gray-100">
+        <div className="pt-4 flex items-center justify-between border-t border-gray-100">
+          {initialData ? (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors font-medium disabled:opacity-50"
+            >
+              <Trash2 className="w-4 h-4" />
+              Eliminar Socio
+            </button>
+          ) : <div />}
+
           <button
             type="submit"
             disabled={loading}
