@@ -44,6 +44,8 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
   }
 }
 
+import { getContrastColor } from "@/lib/colors"
+
 export default async function PartnerRootPage({ 
   params,
   searchParams
@@ -87,18 +89,30 @@ export default async function PartnerRootPage({
 
   // Case 3: Multiple branches -> Selection UI
   const branches = await getPartnerBranches(branchIds)
+  const textColor = getContrastColor(partner.primary_color)
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#FDFCF9]" 
-         style={{ '--primary': partner.primary_color, '--secondary': partner.secondary_color } as any}>
+    <div className="min-h-screen flex flex-col items-center justify-center p-6" 
+         style={{ 
+           backgroundColor: partner.primary_color,
+           '--primary': partner.primary_color, 
+           '--secondary': partner.secondary_color,
+           color: textColor
+         } as any}>
       <div className="max-w-md w-full text-center space-y-8">
         {partner.logo_url && (
-          <img src={partner.logo_url} alt={partner.name} className="h-20 mx-auto object-contain" />
+          <div className="bg-white/10 backdrop-blur-sm p-4 rounded-3xl inline-block">
+            <img src={partner.logo_url} alt={partner.name} className="h-24 mx-auto object-contain" />
+          </div>
         )}
         
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Bienvenido a {partner.name}</h1>
-          <p className="text-gray-500 mt-2">Selecciona tu sucursal para ver el catálogo.</p>
+          <h1 className="text-3xl font-black mb-2" style={{ color: textColor }}>
+            Bienvenido a {partner.name}
+          </h1>
+          <p className="text-lg opacity-80" style={{ color: textColor }}>
+            Selecciona tu sucursal para ver el catálogo de brincolines inflables.
+          </p>
         </div>
 
         <div className="grid gap-4">
@@ -106,13 +120,15 @@ export default async function PartnerRootPage({
             <Link 
               key={branch.id}
               href={active_whatsapp_slug ? `/${slug}/${active_whatsapp_slug}/${branch.slug}/catalogo` : `/${slug}/${branch.slug}/catalogo`}
-              className="group relative bg-white border-2 border-gray-100 p-5 rounded-2xl hover:border-[var(--primary)] transition-all hover:shadow-md text-left flex items-center justify-between"
+              className="group relative bg-white/95 backdrop-blur-sm p-6 rounded-2xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl text-left flex items-center justify-between"
             >
               <div>
-                <span className="block font-bold text-lg text-gray-900 group-hover:text-[var(--primary)]">{branch.name}</span>
+                <span className="block font-bold text-xl text-gray-900 group-hover:text-[var(--primary)] transition-colors">{branch.name}</span>
                 <span className="text-sm text-gray-400">Ver inventario disponible</span>
               </div>
-              <span className="text-2xl opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+              <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-[var(--primary)] transition-colors">
+                <span className="text-xl text-gray-300 group-hover:text-white transition-colors">→</span>
+              </div>
             </Link>
           ))}
         </div>

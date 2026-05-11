@@ -9,8 +9,9 @@ import Link from 'next/link'
 export function PartnerList({ partners }: { partners: Partner[] }) {
   const [loadingId, setLoadingId] = useState<string | null>(null)
 
-  const handleCopyLink = (slug: string) => {
-    const url = `${window.location.origin}/${slug}`
+  const handleCopyLink = (partnerSlug: string, subSlug?: string) => {
+    const baseUrl = window.location.origin
+    const url = subSlug ? `${baseUrl}/${partnerSlug}/${subSlug}` : `${baseUrl}/${partnerSlug}`
     navigator.clipboard.writeText(url)
     alert('URL copiada al portapapeles: ' + url)
   }
@@ -69,7 +70,24 @@ export function PartnerList({ partners }: { partners: Partner[] }) {
                   <div className="font-medium text-gray-900">{p.name}</div>
                 </div>
               </td>
-              <td className="px-6 py-4 text-gray-500 font-mono text-xs">{p.slug}</td>
+              <td className="px-6 py-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 group/slug">
+                    <span className="text-gray-900 font-mono text-xs font-semibold">/{p.slug}</span>
+                    <button onClick={() => handleCopyLink(p.slug)} className="opacity-0 group-hover/slug:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 transition-all">
+                      <Link2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                  {p.links && p.links.map((link, i) => (
+                    <div key={i} className="flex items-center gap-2 group/subslug">
+                      <span className="text-gray-400 font-mono text-[10px]">/{p.slug}/{link.slug}</span>
+                      <button onClick={() => handleCopyLink(p.slug, link.slug)} className="opacity-0 group-hover/subslug:opacity-100 p-0.5 text-gray-400 hover:text-indigo-600 transition-all">
+                        <Link2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </td>
               <td className="px-6 py-4 text-gray-500">
                 <span className="text-xs">
                   {p.branch_ids?.length || (p.branch_id ? 1 : 0)} sucursales

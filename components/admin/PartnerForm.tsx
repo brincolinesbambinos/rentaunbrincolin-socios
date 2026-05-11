@@ -235,13 +235,14 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
             {extraLinks.map((link, index) => (
               <div key={index} className="flex flex-col sm:flex-row gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200 relative group">
                 <div className="flex-1 space-y-1">
-                  <label className="text-[10px] uppercase font-bold text-gray-400 ml-1">Slug Secundario</label>
+                  <label className="text-[10px] uppercase font-bold text-gray-400 ml-1">Slug Secundario (ej. w1)</label>
                   <input 
-                    placeholder="ej. molieventdesign2"
+                    placeholder="Solo el identificador, ej. w1"
                     value={link.slug}
                     onChange={(e) => updateExtraLink(index, 'slug', e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500"
                   />
+                  <p className="text-[10px] text-gray-400 ml-1">Resultará en: /{initialData?.slug || 'socio'}/{link.slug || '...'}</p>
                 </div>
                 <div className="flex-1 space-y-1">
                   <label className="text-[10px] uppercase font-bold text-gray-400 ml-1">WhatsApp Específico</label>
