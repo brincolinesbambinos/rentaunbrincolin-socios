@@ -52,6 +52,9 @@ export async function savePartner(formData: FormData) {
     const branch_ids_json = formData.get('branch_ids_json') as string
     const branch_ids = branch_ids_json ? JSON.parse(branch_ids_json) : []
     
+    const links_json = formData.get('links_json') as string
+    const links = links_json ? JSON.parse(links_json) : []
+    
     // Fallback: Si no hay branch_id (singular), usamos la primera del array de sucursales
     // Esto es vital para evitar errores de RLS si la política requiere un branch_id válido.
     const branch_id = (formData.get('branch_id') as string) || (branch_ids.length > 0 ? branch_ids[0] : null)
@@ -102,6 +105,7 @@ export async function savePartner(formData: FormData) {
       secondary_color,
       branch_id,
       branch_ids,
+      links,
       updated_at: new Date().toISOString()
     }
 

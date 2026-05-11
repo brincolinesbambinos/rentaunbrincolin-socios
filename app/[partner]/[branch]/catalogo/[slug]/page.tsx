@@ -25,8 +25,15 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
   }
 }
 
-export default async function ProductPage({ params }: { params: Promise<{ partner: string, branch: string, slug: string }> }) {
+export default async function ProductPage({ 
+  params,
+  searchParams
+}: { 
+  params: Promise<{ partner: string, branch: string, slug: string }>,
+  searchParams: Promise<{ active_whatsapp_slug?: string }>
+}) {
   const { partner: partnerSlug, branch: branchSlug, slug } = await params
+  const { active_whatsapp_slug } = await searchParams
 
   const partner = await getPartnerBySlug(partnerSlug)
   if (!partner) notFound()
@@ -60,6 +67,13 @@ export default async function ProductPage({ params }: { params: Promise<{ partne
     }
   }
 
+  const activeSlug = active_whatsapp_slug || partnerSlug
+  const activeWhatsApp = partner.links?.find(l => l.slug.toLowerCase() === activeSlug.toLowerCase())?.whatsapp || partner.whatsapp
+
+  const backUrl = active_whatsapp_slug && active_whatsapp_slug.toLowerCase() !== partnerSlug.toLowerCase()
+    ? `/${partnerSlug}/${active_whatsapp_slug}/${branchSlug}/catalogo`
+    : `/${partnerSlug}/${branchSlug}/catalogo`
+
   return (
     <>
       <script 
@@ -71,7 +85,8 @@ export default async function ProductPage({ params }: { params: Promise<{ partne
         partner={partner} 
         similar={similar}
         branchName={activeBranch.name}
-        backUrl={`/${partnerSlug}/${branchSlug}/catalogo`}
+        backUrl={backUrl}
+        activeWhatsApp={activeWhatsApp}
       />
     </>
   )

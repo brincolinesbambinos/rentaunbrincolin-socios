@@ -44,8 +44,15 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
   }
 }
 
-export default async function PartnerRootPage({ params }: { params: Promise<{ partner: string }> }) {
+export default async function PartnerRootPage({ 
+  params,
+  searchParams
+}: { 
+  params: Promise<{ partner: string }>,
+  searchParams: Promise<{ active_whatsapp_slug?: string }>
+}) {
   const { partner: slug } = await params
+  const { active_whatsapp_slug } = await searchParams
   const partner = await getPartnerBySlug(slug)
   
   if (!partner) notFound()
@@ -62,6 +69,7 @@ export default async function PartnerRootPage({ params }: { params: Promise<{ pa
         products={products} 
         featured={featured} 
         pixelId={null}
+        activeSlug={active_whatsapp_slug || slug}
       />
     )
   }
@@ -70,7 +78,10 @@ export default async function PartnerRootPage({ params }: { params: Promise<{ pa
   if (branchIds.length === 1) {
     const branches = await getPartnerBranches(branchIds)
     if (branches.length > 0) {
-      redirect(`/${slug}/${branches[0].slug}/catalogo`)
+      const target = active_whatsapp_slug 
+        ? `/${slug}/${active_whatsapp_slug}/${branches[0].slug}/catalogo`
+        : `/${slug}/${branches[0].slug}/catalogo`
+      redirect(target)
     }
   }
 
@@ -94,7 +105,7 @@ export default async function PartnerRootPage({ params }: { params: Promise<{ pa
           {branches.map(branch => (
             <Link 
               key={branch.id}
-              href={`/${slug}/${branch.slug}/catalogo`}
+              href={active_whatsapp_slug ? `/${slug}/${active_whatsapp_slug}/${branch.slug}/catalogo` : `/${slug}/${branch.slug}/catalogo`}
               className="group relative bg-white border-2 border-gray-100 p-5 rounded-2xl hover:border-[var(--primary)] transition-all hover:shadow-md text-left flex items-center justify-between"
             >
               <div>

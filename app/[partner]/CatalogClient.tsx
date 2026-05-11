@@ -15,6 +15,7 @@ interface Props {
   pixelId: string | null
   branchName?: string | null
   branchSlug?: string | null
+  activeSlug?: string | null
 }
 
 const CATEGORIES = ["Todos", "Acuático", "Clásico", "Destreza", "Interactivo", "Mecánico", "Personajes", "Princesas", "Variedad"]
@@ -38,9 +39,17 @@ const getFinalPrice = (product: Product) => {
   return product.price ?? 0
 }
 
-export default function CatalogClient({ partner, products, featured = [], pixelId, branchName, branchSlug }: Props) {
+export default function CatalogClient({ partner, products, featured = [], pixelId, branchName, branchSlug, activeSlug }: Props) {
   const router = useRouter()
   const [filtersOpen, setFiltersOpen] = useState(false)
+
+  // Find the WhatsApp number associated with the active slug
+  const activeWhatsApp = useMemo(() => {
+    if (!activeSlug || !partner.links) return partner.whatsapp
+    const link = partner.links.find(l => l.slug.toLowerCase() === activeSlug.toLowerCase())
+    return link ? link.whatsapp : partner.whatsapp
+  }, [activeSlug, partner.links, partner.whatsapp])
+
   
   async function trackEvent(eventName: string, data?: Record<string, any>) {
     try {
@@ -100,11 +109,15 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       value: getFinalPrice(product) 
     })
     
+    const baseUrl = activeSlug && activeSlug.toLowerCase() !== partner.slug.toLowerCase() 
+      ? `/${partner.slug}/${activeSlug}` 
+      : `/${partner.slug}`
+
     if (branchSlug) {
-      router.push(`/${partner.slug}/${branchSlug}/catalogo/${product.slug}`)
+      router.push(`${baseUrl}/${branchSlug}/catalogo/${product.slug}`)
     } else {
       // Global fallback if no branch
-      router.push(`/${partner.slug}/catalogo/${product.slug}`)
+      router.push(`${baseUrl}/catalogo/${product.slug}`)
     }
   }
 
@@ -134,7 +147,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             <div style={{ fontSize: 11, opacity: 0.5, letterSpacing: 0.5 }}>Plataforma Oficial</div>
           </div>
         </div>
-        <a href={`https://wa.me/${partner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
+        <a href={`https://wa.me/${activeWhatsApp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
            onClick={() => trackEvent('Lead')}
           style={{ background: 'var(--color-secondary)', color: 'var(--text-on-secondary)', padding: "10px 20px", borderRadius: 50, fontSize: 13, fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
           💬 Contacto directo
@@ -296,7 +309,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 </div>
                 <p style={{ fontSize: 12, color: "#999", margin: "0 0 14px", lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{product.description}</p>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <a href={buildWhatsAppUrl(partner, product.name, branchName || undefined)} target="_blank" rel="noopener noreferrer" 
+                  <a href={buildWhatsAppUrl(partner, product.name, branchName || undefined, activeWhatsApp)} target="_blank" rel="noopener noreferrer" 
                     onClick={e => {
                       e.stopPropagation();
                       trackEvent('Contact', { contentName: product.name, contentId: product.id })

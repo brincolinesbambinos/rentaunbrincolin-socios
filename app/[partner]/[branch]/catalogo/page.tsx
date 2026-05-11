@@ -45,8 +45,15 @@ export async function generateMetadata(
   }
 }
 
-export default async function CatalogoPage({ params }: { params: Promise<{ partner: string, branch: string }> }) {
+export default async function CatalogoPage({ 
+  params,
+  searchParams
+}: { 
+  params: Promise<{ partner: string, branch: string }>,
+  searchParams: Promise<{ active_whatsapp_slug?: string }>
+}) {
   const { partner: partnerSlug, branch: branchSlug } = await params
+  const { active_whatsapp_slug } = await searchParams
   const partner = await getPartnerBySlug(partnerSlug)
   
   if (!partner) notFound()
@@ -71,6 +78,7 @@ export default async function CatalogoPage({ params }: { params: Promise<{ partn
       pixelId={pixelId}
       branchName={activeBranch.name}
       branchSlug={activeBranch.slug}
+      activeSlug={active_whatsapp_slug || partnerSlug}
     />
   )
 }

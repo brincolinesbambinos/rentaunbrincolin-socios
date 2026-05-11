@@ -45,6 +45,7 @@ export interface Partner {
   branch_id: string | null
   branch_ids: string[]
   branches: Branch | null
+  links: { slug: string; whatsapp: string }[] | null
   active: boolean
   created_at: string
   updated_at: string

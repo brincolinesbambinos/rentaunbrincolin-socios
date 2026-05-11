@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react'
 import { Partner } from '@/types'
 import { useRouter } from 'next/navigation'
-import { Upload, ArrowLeft } from 'lucide-react'
+import { Upload, ArrowLeft, Plus } from 'lucide-react'
 import Link from 'next/link'
 import { savePartner, deletePartner } from '@/app/admin/actions'
 import { compressImage } from '@/lib/image'
@@ -24,6 +24,24 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
   const [selectedBranchIds, setSelectedBranchIds] = useState<string[]>(
     initialData?.branch_ids ?? (initialData?.branch_id ? [initialData.branch_id] : [])
   )
+
+  const [extraLinks, setExtraLinks] = useState<{ slug: string; whatsapp: string }[]>(
+    initialData?.links || []
+  )
+
+  const addExtraLink = () => {
+    setExtraLinks([...extraLinks, { slug: '', whatsapp: '' }])
+  }
+
+  const updateExtraLink = (index: number, field: 'slug' | 'whatsapp', value: string) => {
+    const newLinks = [...extraLinks]
+    newLinks[index][field] = value
+    setExtraLinks(newLinks)
+  }
+
+  const removeExtraLink = (index: number) => {
+    setExtraLinks(extraLinks.filter((_, i) => i !== index))
+  }
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -204,6 +222,56 @@ export function PartnerForm({ initialData, branches = [] }: PartnerFormProps) {
             className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none" 
           />
           <p className="text-xs text-gray-500">Usa las etiquetas <strong className="text-indigo-600 font-mono">{"{producto}"}</strong> para el nombre del inflable y <strong className="text-indigo-600 font-mono">{"{sucursal}"}</strong> para el nombre de la sucursal activa.</p>
+        </div>
+
+        {/* Extra Links Section */}
+        <div className="space-y-4 pt-8 border-t border-gray-100">
+          <div>
+            <label className="block text-base font-semibold text-gray-900">Enlaces Adicionales (WhatsApp)</label>
+            <p className="text-sm text-gray-500 mt-1">Crea accesos personalizados con diferentes números de WhatsApp. Cada uno tendrá su propia URL.</p>
+          </div>
+
+          <div className="space-y-3">
+            {extraLinks.map((link, index) => (
+              <div key={index} className="flex flex-col sm:flex-row gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200 relative group">
+                <div className="flex-1 space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-gray-400 ml-1">Slug Secundario</label>
+                  <input 
+                    placeholder="ej. molieventdesign2"
+                    value={link.slug}
+                    onChange={(e) => updateExtraLink(index, 'slug', e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex-1 space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-gray-400 ml-1">WhatsApp Específico</label>
+                  <input 
+                    placeholder="+52 123 456 7890"
+                    value={link.whatsapp}
+                    onChange={(e) => updateExtraLink(index, 'whatsapp', e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => removeExtraLink(index)}
+                  className="sm:mt-5 p-2 text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+
+            <button 
+              type="button"
+              onClick={addExtraLink}
+              className="w-full py-3 border-2 border-dashed border-gray-200 rounded-xl text-sm font-medium text-gray-500 hover:border-indigo-300 hover:text-indigo-600 transition-all flex items-center justify-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Agregar otro número de WhatsApp
+            </button>
+          </div>
+          <input type="hidden" name="links_json" value={JSON.stringify(extraLinks)} />
         </div>
 
         <div className="space-y-4 pt-4 border-t border-gray-100">

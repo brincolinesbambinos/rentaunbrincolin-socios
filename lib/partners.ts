@@ -25,7 +25,7 @@ export async function getPartnerBySlug(slug: string): Promise<Partner | null> {
         locale
       )
     `)
-    .ilike('slug', slug)
+    .or(`slug.ilike.${slug},links.cs.[{"slug":"${slug.toLowerCase()}"}]`)
     .eq('active', true)
     .maybeSingle()
 

@@ -11,10 +11,11 @@ interface Props {
   similar: Product[]
   branchName: string
   backUrl: string
+  activeWhatsApp?: string
 }
 
-export default function ProductDetailClient({ product, partner, similar, branchName, backUrl }: Props) {
-  const whatsappUrl = buildWhatsAppUrl(partner, product.name, branchName)
+export default function ProductDetailClient({ product, partner, similar, branchName, backUrl, activeWhatsApp }: Props) {
+  const whatsappUrl = buildWhatsAppUrl(partner, product.name, branchName, activeWhatsApp)
 
   return (
     <div className="min-h-screen bg-[#FDFCF9] pb-20">
