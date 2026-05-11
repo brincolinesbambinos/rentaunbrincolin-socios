@@ -13,7 +13,7 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
   
   if (!partner) return {}
 
-  const title = `Catálogo - ${partner.name}`
+  const title = `Catálogo de Brincolines Inflables - ${partner.name}`
   const description = `Explora nuestro catálogo de inflables y juegos en ${partner.name}.`
   const logo = partner.logo_url ?? "/og-default.png"
 

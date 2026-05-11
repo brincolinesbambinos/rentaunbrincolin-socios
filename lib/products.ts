@@ -168,7 +168,7 @@ export async function getProductBySlug(slug: string, branchId: string): Promise<
         category_id, branch_id,
         categories ( id, name, slug )
       `)
-      .eq('slug', slug)
+      .ilike('slug', slug)
       .eq('branch_id', branchId)
       .eq('visible', true)
       .maybeSingle()

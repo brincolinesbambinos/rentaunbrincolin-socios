@@ -25,7 +25,7 @@ export async function getPartnerBySlug(slug: string): Promise<Partner | null> {
         locale
       )
     `)
-    .eq('slug', slug)
+    .ilike('slug', slug)
     .eq('active', true)
     .maybeSingle()
 

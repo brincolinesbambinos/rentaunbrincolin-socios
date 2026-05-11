@@ -14,7 +14,7 @@ export async function generateMetadata(
   
   if (!partner) return {}
 
-  const title = `Catálogo - ${partner.name}`
+  const title = `Catálogo de Brincolines Inflables - ${partner.name}`
   const description = `Explora nuestro catálogo de inflables y juegos en ${partner.name}.`
   const logo = partner.logo_url ?? "/og-default.png"
 
@@ -53,7 +53,7 @@ export default async function CatalogoPage({ params }: { params: Promise<{ partn
 
   // Get branches for this partner
   const branches = await getPartnerBranches(partner.branch_ids ?? [])
-  const activeBranch = branches.find(b => b.slug === branchSlug)
+  const activeBranch = branches.find(b => b.slug.toLowerCase() === branchSlug.toLowerCase())
 
   if (!activeBranch) notFound()
 

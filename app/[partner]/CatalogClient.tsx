@@ -117,8 +117,8 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       <div style={{ 
         display: "flex", alignItems: "center", justifyContent: "space-between", 
         padding: "0.8rem 2rem", borderBottom: "1px solid rgba(255,255,255,0.08)",
-        position: "sticky", top: 0, zIndex: 110, background: partner.primary_color,
-        color: "#fff",
+        position: "sticky", top: 0, zIndex: 110, background: 'var(--color-primary)',
+        color: 'var(--text-on-primary)',
         boxShadow: "0 4px 20px rgba(0,0,0,0.1)"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -136,13 +136,13 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
         </div>
         <a href={`https://wa.me/${partner.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noopener noreferrer"
            onClick={() => trackEvent('Lead')}
-          style={{ background: partner.secondary_color, color: "#fff", padding: "10px 20px", borderRadius: 50, fontSize: 13, fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
+          style={{ background: 'var(--color-secondary)', color: 'var(--text-on-secondary)', padding: "10px 20px", borderRadius: 50, fontSize: 13, fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: 8 }}>
           💬 Contacto directo
         </a>
       </div>
 
       {/* Hero */}
-      <div style={{ background: partner.primary_color, color: "#fff", textAlign: "center", padding: "3rem 2rem 3.5rem" }}>
+      <div style={{ background: 'var(--color-primary)', color: 'var(--text-on-primary)', textAlign: "center", padding: "3rem 2rem 3.5rem" }}>
         <div style={{ fontSize: 11, letterSpacing: 3, opacity: 0.4, textTransform: "uppercase", marginBottom: 14 }}>Catálogo de inflables</div>
         <h1 style={{ fontSize: 44, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.1 }}>Nuestros Inflables</h1>
         <p style={{ fontSize: 16, opacity: 0.6, margin: 0, maxWidth: 420, marginLeft: "auto", marginRight: "auto" }}>
@@ -284,7 +284,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                     <div style={{ fontSize: 11, color: c.bg, fontWeight: 600, marginTop: 6, opacity: 0.7 }}>{product.size || "—"}</div>
                   </>
                 )}
-                {product.popular && <div style={{ position: "absolute", top: 12, left: 12, background: partner.secondary_color, color: "#fff", fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 50 }}>⭐ POPULAR</div>}
+                {product.popular && <div style={{ position: "absolute", top: 12, left: 12, background: 'var(--color-secondary)', color: 'var(--text-on-secondary)', fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 50 }}>⭐ POPULAR</div>}
               </div>
               <div style={{ padding: "1rem 1.1rem 1.2rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
@@ -301,7 +301,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                       e.stopPropagation();
                       trackEvent('Contact', { contentName: product.name, contentId: product.id })
                     }}
-                    style={{ flex: 1, background: partner.primary_color, color: "#fff", padding: "10px 0", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none", textAlign: "center" }}>
+                    style={{ flex: 1, background: 'var(--color-primary)', color: 'var(--text-on-primary)', padding: "10px 0", borderRadius: 10, fontSize: 12, fontWeight: 700, textDecoration: "none", textAlign: "center" }}>
                     💬 Consultar
                   </a>
                   <button onClick={e => { e.stopPropagation(); handleProductClick(product) }}
@@ -316,8 +316,8 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       </div>
 
       {/* ── FOOTER ── */}
-      <div style={{ background: partner.primary_color, color: "rgba(255,255,255,0.4)", textAlign: "center", padding: "1.5rem", fontSize: 12, marginTop: "2rem" }}>
-        Catálogo con tecnología de <strong style={{ color: "rgba(255,255,255,0.6)" }}>Brincolines Bambinos</strong>
+      <div style={{ background: 'var(--color-primary)', color: 'var(--text-on-primary)', textAlign: "center", padding: "1.5rem", fontSize: 12, marginTop: "2rem", opacity: 0.8 }}>
+        Catálogo con tecnología de <strong style={{ color: 'inherit' }}>Brincolines Bambinos</strong>
       </div>
     </div>
   )

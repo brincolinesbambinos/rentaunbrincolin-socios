@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getPartnerBySlug } from '../../lib/partners'
+import { getContrastColor } from '../../lib/colors'
 import { ReactNode } from 'react'
 
 export async function generateMetadata({ params }: { params: Promise<{ partner: string }> }) {
@@ -13,7 +14,7 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
   }
 
   return {
-    title: `Catálogo de ${partner.name}`,
+    title: `Catálogo de Brincolines Inflables - ${partner.name}`,
     description: `Descubre los brincolines e inflables disponibles en ${partner.name}`,
   }
 }
@@ -38,6 +39,8 @@ export default async function PartnerLayout({
       style={{
         '--color-primary': partner.primary_color || '#1A1A2E',
         '--color-secondary': partner.secondary_color || '#E8C44A',
+        '--text-on-primary': getContrastColor(partner.primary_color),
+        '--text-on-secondary': getContrastColor(partner.secondary_color),
       } as React.CSSProperties}
     >
       {children}

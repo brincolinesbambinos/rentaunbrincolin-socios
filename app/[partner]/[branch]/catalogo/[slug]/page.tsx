@@ -10,7 +10,7 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
 
   const branchIds = partner.branch_ids ?? (partner.branch_id ? [partner.branch_id] : [])
   const branches = await getPartnerBranches(branchIds)
-  const activeBranch = branches.find(b => b.slug === branchSlug)
+  const activeBranch = branches.find(b => b.slug.toLowerCase() === branchSlug.toLowerCase())
   if (!activeBranch) return {}
 
   const product = await getProductBySlug(slug, activeBranch.id)
@@ -33,7 +33,7 @@ export default async function ProductPage({ params }: { params: Promise<{ partne
 
   const branchIds = partner.branch_ids ?? (partner.branch_id ? [partner.branch_id] : [])
   const branches = await getPartnerBranches(branchIds)
-  const activeBranch = branches.find(b => b.slug === branchSlug)
+  const activeBranch = branches.find(b => b.slug.toLowerCase() === branchSlug.toLowerCase())
   if (!activeBranch) notFound()
 
   const product = await getProductBySlug(slug, activeBranch.id)
