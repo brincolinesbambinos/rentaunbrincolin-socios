@@ -5,6 +5,11 @@ export async function proxy(request: NextRequest) {
   // First, handle Supabase session
   const response = await updateSession(request)
   
+  // If updateSession already decided to redirect, honor it immediately
+  if (response.status >= 300 && response.status < 400) {
+    return response
+  }
+
   const url = request.nextUrl.clone()
   const pathParts = url.pathname.split('/').filter(Boolean)
 
@@ -19,7 +24,6 @@ export async function proxy(request: NextRequest) {
       url.pathname = '/' + newPathParts.join('/')
       url.searchParams.set('active_whatsapp_slug', maybeWhatsappId)
       
-      // We must preserve any headers/cookies from updateSession response
       const rewriteResponse = NextResponse.rewrite(url)
       
       // Copy cookies from updateSession response to the rewrite response

@@ -10,8 +10,9 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect('/admin/login')
+    return <>{children}</>
   }
+
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Sidebar */}
