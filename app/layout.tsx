@@ -14,7 +14,22 @@ export const metadata: Metadata = {
     default: "Business Partner · Brincolines Bambinos",
     template: "%s · Brincolines Bambinos",
   },
-  description: "Programa de Socios Comerciales de Brincolines Bambinos.",
+  description: "Programa de Socios Comerciales de Brincolines Bambinos. Añade renta de brincolines a tus servicios sin inversión.",
+  openGraph: {
+    siteName: 'Brincolines Bambinos Partners',
+    images: [
+      {
+        url: 'https://www.rentaunbrincolin.com/og-default.png',
+        width: 1080,
+        height: 1080,
+        alt: 'Business Partner · Brincolines Bambinos',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    images: ['https://www.rentaunbrincolin.com/og-default.png'],
+  },
 };
 
 export default function RootLayout({

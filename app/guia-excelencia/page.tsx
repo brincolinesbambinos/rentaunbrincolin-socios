@@ -4,6 +4,23 @@ import Link from 'next/link'
 export const metadata: Metadata = {
   title: 'Guía de Excelencia · Brincolines Bambinos Partners',
   description: 'Únete a la Guía de Proveedores de Excelencia de Brincolines Bambinos. Solo para negocios con los más altos estándares de servicio.',
+  openGraph: {
+    title: 'Guía de Proveedores de Excelencia · Brincolines Bambinos',
+    description: 'Solo los mejores proveedores. Exposición a 30–50 clientes potenciales diarios de Brincolines Bambinos.',
+    url: 'https://www.rentaunbrincolin.com/guia-excelencia',
+    images: [
+      {
+        url: 'https://www.rentaunbrincolin.com/og-guia.png',
+        width: 1080,
+        height: 1080,
+        alt: 'Guía de Proveedores de Excelencia · Brincolines Bambinos',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    images: ['https://www.rentaunbrincolin.com/og-guia.png'],
+  },
 }
 
 // ─── Criterios de excelencia ──────────────────────────────────────────────────
@@ -56,9 +73,20 @@ const BENEFICIOS = [
   },
 ]
 
+// ─── Rotación de WhatsApp ────────────────────────────────────────────────────
+
+const WA_PHONES = ['523318033172', '523320781405', '523323484073']
+
+function getGuiaWaUrl() {
+  const idx = new Date().getDate() % WA_PHONES.length
+  const phone = WA_PHONES[idx]
+  return `https://wa.me/${phone}?text=${encodeURIComponent('Hola, me interesa ser parte de la Guía de Proveedores de Excelencia de Brincolines Bambinos.')}`
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function GuiaExcelenciaPage() {
+  const waUrl = getGuiaWaUrl()
   return (
     <main style={{
       background: 'linear-gradient(to bottom, #0a0a12 0%, #0f0f1e 100%)',
@@ -377,7 +405,7 @@ export default function GuiaExcelenciaPage() {
             trabajar. Si quieres iniciar el proceso de revisión y autorización de tu negocio, cuéntanos.
           </p>
           <a
-            href="https://wa.me/523315930819?text=Hola%2C%20me%20interesa%20ser%20parte%20de%20la%20Gu%C3%ADa%20de%20Proveedores%20de%20Excelencia%20de%20Brincolines%20Bambinos."
+            href={waUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={{

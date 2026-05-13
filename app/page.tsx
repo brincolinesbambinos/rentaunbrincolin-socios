@@ -4,42 +4,39 @@ import Link from 'next/link'
 export const metadata: Metadata = {
   title: 'Business Partner · Brincolines Bambinos',
   description:
-    'Programa de Socios Comerciales de Brincolines Bambinos. Diseñado para terrazas y organizadores de eventos. Gana comisiones del 5 al 20% en cada renta que generes.',
+    'Programa de Socios Comerciales de Brincolines Bambinos. Diseñado para terrazas y organizadores de eventos. Añade renta de brincolines a tus servicios sin inversión.',
   openGraph: {
     title: 'Business Partner · Brincolines Bambinos',
-    description: 'Súmate al programa de socios y gana comisiones en cada evento.',
+    description: 'Únete al programa de socios Brincolines Bambinos y crece con nosotros.',
+    url: 'https://www.rentaunbrincolin.com',
+    images: [
+      {
+        url: 'https://www.rentaunbrincolin.com/og-default.png',
+        width: 1080,
+        height: 1080,
+        alt: 'Business Partner · Brincolines Bambinos',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    images: ['https://www.rentaunbrincolin.com/og-default.png'],
   },
 }
 
-// ─── Datos ───────────────────────────────────────────────────────────────────
+// ─── Paleta BB ───────────────────────────────────────────────────────────────
 
-const COMISIONES = [
-  {
-    pct: '5%',
-    titulo: 'Brincolines básicos',
-    desc: 'En rentas de brincolines hasta $1,480',
-    color: '#C49A1A',
-  },
-  {
-    pct: '10%',
-    titulo: 'Rango medio',
-    desc: 'En rentas de brincolines de $1,480 a $3,000',
-    color: '#B8830A',
-  },
-  {
-    pct: '10%',
-    titulo: 'Juegos mecánicos',
-    desc: 'En juegos mecánicos o equipos que requieran operador',
-    color: '#A06E00',
-  },
-  {
-    pct: '20%',
-    titulo: 'Rentas premium',
-    desc: 'En rentas de brincolines mayores a $3,000',
-    color: '#8A5C00',
-    highlight: true,
-  },
-]
+const BB = {
+  ink:    '#1a0533',
+  mid:    '#2d1259',
+  accent: '#7c3aed',
+  light:  '#a78bfa',
+  pale:   '#f3f0ff',
+  xpale:  '#f8f5ff',
+  footer: '#0d0019',
+}
+
+// ─── Datos ───────────────────────────────────────────────────────────────────
 
 const BENEFICIOS = [
   { icon: '✅', texto: 'Equipos en perfectas condiciones' },
@@ -49,14 +46,14 @@ const BENEFICIOS = [
 ]
 
 const CATEGORIAS = [
-  { nombre: 'Clásicos',    emoji: '🏰' },
-  { nombre: 'Interactivo', emoji: '⭐' },
-  { nombre: 'Princesas',   emoji: '👑' },
-  { nombre: 'Acuáticos',   emoji: '💧' },
-  { nombre: 'Mecánicos',   emoji: '⚙️' },
-  { nombre: 'Destreza',    emoji: '⚡' },
-  { nombre: 'Varios',      emoji: '🎨' },
-  { nombre: 'Personajes',  emoji: '🦸' },
+  { slug: 'clasico',      nombre: 'Clásicos',    main: '#B573F5', dark: '#341741' },
+  { slug: 'interactivo',  nombre: 'Interactivo', main: '#ECCE0C', dark: '#4E3B06' },
+  { slug: 'princesas',    nombre: 'Princesas',   main: '#FF7FAF', dark: '#501D38' },
+  { slug: 'acuatico',     nombre: 'Acuáticos',   main: '#00BDEB', dark: '#0D3651' },
+  { slug: 'mecanico',     nombre: 'Mecánicos',   main: '#18C85B', dark: '#053429' },
+  { slug: 'destreza',     nombre: 'Destreza',    main: '#FF2C57', dark: '#5D1220' },
+  { slug: 'variedad',     nombre: 'Varios',      main: '#2898F4', dark: '#12224B' },
+  { slug: 'personajes',   nombre: 'Personajes',  main: '#FF9000', dark: '#723016' },
 ]
 
 const PASOS = [
@@ -68,32 +65,52 @@ const PASOS = [
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
+// ─── Rotación de WhatsApp ────────────────────────────────────────────────────
+// Rota diariamente (día del mes % cantidad de números). Consistente entre
+// server render y client hydration dentro del mismo día.
+
+const WA_PHONES = ['523318033172', '523320781405', '523323484073']
+
+function getWaUrl() {
+  const idx = new Date().getDate() % WA_PHONES.length
+  const phone = WA_PHONES[idx]
+  const msg = encodeURIComponent(
+    'Hola, me interesa el programa Business Partner de Brincolines Bambinos. ¿Me pueden dar más información? ¿En qué ciudad están disponibles?'
+  )
+  return `https://wa.me/${phone}?text=${msg}`
+}
+
 export default function HomePage() {
-  const WA_NUMBER = '523318033172'
-  const WA_MSG = encodeURIComponent('Hola, me interesa el programa Business Partner de Brincolines Bambinos. ¿Me pueden dar más información?')
-  const waUrl = `https://wa.me/${WA_NUMBER}?text=${WA_MSG}`
+  const waUrl = getWaUrl()
 
   return (
-    <main style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: '#FFFDF0', color: '#2A1A00', minHeight: '100vh' }}>
+    <>
+    <style>{`
+      .partners-nav-mid { display: flex; align-items: center; gap: 1rem; }
+      @media (max-width: 680px) {
+        .partners-nav-mid { display: none !important; }
+      }
+    `}</style>
+    <main style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: BB.xpale, color: BB.ink, minHeight: '100vh', overflowX: 'hidden' }}>
 
       {/* ── Navbar mínimo ─────────────────────────────────── */}
       <nav style={{
         position: 'sticky', top: 0, zIndex: 50,
-        background: 'rgba(255,253,240,0.95)',
+        background: 'rgba(248,245,255,0.96)',
         backdropFilter: 'blur(12px)',
-        borderBottom: '1px solid rgba(196,154,26,0.2)',
-        padding: '0 clamp(1.25rem, 5vw, 4rem)',
+        borderBottom: '1px solid rgba(124,58,237,0.15)',
+        padding: '0 clamp(1.25rem, 4vw, 3rem)',
         height: 60,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: '1rem',
       }}>
-        <Link href="https://www.brincolinesbambinos.com" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none' }}>
-          <span style={{ fontWeight: 900, fontSize: '1.125rem', color: '#2A1A00', letterSpacing: '-0.02em' }}>
-            Brincolines Bambinos
-          </span>
+        <Link href="https://www.brincolinesbambinos.com" style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', textDecoration: 'none', flexShrink: 0, minWidth: 0 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/Logo-Color.png" alt="Brincolines Bambinos" style={{ display: 'block', height: '28px', width: 'auto', maxWidth: '160px', objectFit: 'contain' }} />
           <span style={{
-            background: '#C49A1A',
+            background: BB.accent,
             color: 'white',
             fontSize: '0.6rem',
             fontWeight: 800,
@@ -101,45 +118,39 @@ export default function HomePage() {
             letterSpacing: '0.08em',
             padding: '2px 7px',
             borderRadius: '999px',
+            flexShrink: 0,
           }}>
             Partners
           </span>
         </Link>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Link
-            href="/guia-excelencia"
-            style={{
-              color: '#8A5C00',
-              fontSize: '0.8125rem',
-              fontWeight: 600,
-              textDecoration: 'none',
-            }}
-          >
-            ⭐ Guía de Excelencia
-          </Link>
-          <Link
-            href="/admin"
-            style={{
-              color: '#8A5C00',
-              fontSize: '0.8125rem',
-              fontWeight: 600,
-              textDecoration: 'none',
-            }}
-          >
-            Acceso socios
-          </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexShrink: 0 }}>
+          <div className="partners-nav-mid">
+            <Link
+              href="/guia-excelencia"
+              style={{ color: BB.accent, fontSize: '0.8125rem', fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}
+            >
+              ⭐ Guía de Excelencia
+            </Link>
+            <Link
+              href="/admin"
+              style={{ color: BB.accent, fontSize: '0.8125rem', fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}
+            >
+              Acceso socios
+            </Link>
+          </div>
           <a
             href={waUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={{
-              background: '#C49A1A',
+              background: BB.accent,
               color: 'white',
               padding: '0.45rem 1rem',
               borderRadius: '8px',
               fontSize: '0.8125rem',
               fontWeight: 700,
               textDecoration: 'none',
+              whiteSpace: 'nowrap',
             }}
           >
             Quiero ser socio →
@@ -149,32 +160,29 @@ export default function HomePage() {
 
       {/* ── Hero ──────────────────────────────────────────── */}
       <section style={{
-        background: 'linear-gradient(160deg, #2A1A00 0%, #4A2F00 100%)',
+        background: `linear-gradient(160deg, ${BB.ink} 0%, ${BB.mid} 100%)`,
         padding: 'clamp(4rem, 10vw, 8rem) clamp(1.25rem, 5vw, 4rem)',
         position: 'relative',
         overflow: 'hidden',
       }}>
-        {/* Textura */}
         <div style={{
           position: 'absolute', inset: 0,
-          backgroundImage: `radial-gradient(circle at 20% 50%, rgba(196,154,26,0.15) 0%, transparent 60%),
-                            radial-gradient(circle at 80% 20%, rgba(196,154,26,0.1) 0%, transparent 50%)`,
+          backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(124,58,237,0.2) 0%, transparent 60%), radial-gradient(circle at 80% 20%, rgba(124,58,237,0.12) 0%, transparent 50%)',
           pointerEvents: 'none',
         }} />
 
         <div style={{ maxWidth: '860px', margin: '0 auto', position: 'relative' }}>
-          {/* Eyebrow */}
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: '0.5rem',
-            background: 'rgba(196,154,26,0.2)',
-            border: '1px solid rgba(196,154,26,0.4)',
+            background: 'rgba(124,58,237,0.2)',
+            border: '1px solid rgba(124,58,237,0.4)',
             borderRadius: '999px',
             padding: '0.35rem 1rem',
             fontSize: '0.7rem',
             fontWeight: 800,
-            color: '#E8C000',
+            color: BB.light,
             textTransform: 'uppercase',
             letterSpacing: '0.12em',
             marginBottom: '1.75rem',
@@ -190,7 +198,7 @@ export default function HomePage() {
             lineHeight: 1.05,
             marginBottom: '1.25rem',
           }}>
-            <span style={{ color: '#E8C000' }}>Business Partner.</span>
+            <span style={{ color: BB.light }}>Business Partner.</span>
             <br />
             Haz dinero con cada evento que organizas.
           </h1>
@@ -202,7 +210,8 @@ export default function HomePage() {
             maxWidth: 620,
             marginBottom: '2.5rem',
           }}>
-            Si tienes una terraza, salón de eventos o eres organizador de fiestas, este programa es para ti. Recomienda a Bambinos y gana comisiones de hasta el <strong style={{ color: '#E8C000' }}>20%</strong> en cada renta que generes — sin inversión, sin complicaciones.
+            Si tienes una terraza, salón de eventos o eres organizador de fiestas, este programa es para ti.
+            Recomienda a Bambinos y empieza a ganar comisiones — sin inversión, sin complicaciones.
           </p>
 
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -214,7 +223,7 @@ export default function HomePage() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.625rem',
-                background: '#C49A1A',
+                background: BB.accent,
                 color: 'white',
                 padding: '0.875rem 1.75rem',
                 borderRadius: '14px',
@@ -252,7 +261,7 @@ export default function HomePage() {
 
       {/* ── Tagline ───────────────────────────────────────── */}
       <section style={{
-        background: '#C49A1A',
+        background: BB.accent,
         padding: '1rem clamp(1.25rem, 5vw, 4rem)',
         textAlign: 'center',
       }}>
@@ -268,118 +277,20 @@ export default function HomePage() {
         </p>
       </section>
 
-      {/* ── Comisiones ────────────────────────────────────── */}
-      <section style={{
-        padding: 'clamp(3.5rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem)',
-        background: '#FFFDF0',
-      }}>
-        <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-          <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-            <span style={{
-              display: 'inline-block',
-              background: 'rgba(196,154,26,0.15)',
-              color: '#8A5C00',
-              fontSize: '0.7rem',
-              fontWeight: 800,
-              textTransform: 'uppercase',
-              letterSpacing: '0.1em',
-              padding: '0.3rem 0.9rem',
-              borderRadius: '999px',
-              marginBottom: '1rem',
-              border: '1px solid rgba(196,154,26,0.3)',
-            }}>
-              Gana atractivas comisiones
-            </span>
-            <h2 style={{
-              fontSize: 'clamp(1.75rem, 4vw, 2.75rem)',
-              fontWeight: 900,
-              letterSpacing: '-0.025em',
-              color: '#2A1A00',
-              lineHeight: 1.1,
-              margin: 0,
-            }}>
-              Añade renta de brincolines<br />a tus servicios.
-            </h2>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
-            {COMISIONES.map((c) => (
-              <div
-                key={c.titulo}
-                style={{
-                  background: c.highlight ? '#2A1A00' : 'white',
-                  border: c.highlight ? 'none' : '1px solid rgba(196,154,26,0.2)',
-                  borderRadius: '20px',
-                  padding: '1.75rem 1.5rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem',
-                  boxShadow: c.highlight ? '0 8px 32px rgba(196,154,26,0.25)' : 'none',
-                  position: 'relative',
-                  overflow: 'hidden',
-                }}
-              >
-                {c.highlight && (
-                  <div style={{
-                    position: 'absolute',
-                    top: 12,
-                    right: 12,
-                    background: '#C49A1A',
-                    color: 'white',
-                    fontSize: '0.6rem',
-                    fontWeight: 900,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
-                    padding: '2px 8px',
-                    borderRadius: '999px',
-                  }}>
-                    Más rentable
-                  </div>
-                )}
-                <div style={{
-                  fontSize: 'clamp(2.5rem, 5vw, 3.5rem)',
-                  fontWeight: 900,
-                  color: c.highlight ? '#E8C000' : c.color,
-                  lineHeight: 1,
-                  letterSpacing: '-0.03em',
-                }}>
-                  {c.pct}
-                </div>
-                <div style={{
-                  fontSize: '0.9375rem',
-                  fontWeight: 700,
-                  color: c.highlight ? 'white' : '#2A1A00',
-                  lineHeight: 1.2,
-                }}>
-                  {c.titulo}
-                </div>
-                <div style={{
-                  fontSize: '0.875rem',
-                  color: c.highlight ? 'rgba(255,255,255,0.82)' : '#5A3800',
-                  lineHeight: 1.5,
-                }}>
-                  {c.desc}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {/* ── Beneficios ────────────────────────────────────── */}
       <section style={{
-        background: '#FEF8DC',
+        background: BB.pale,
         padding: 'clamp(3rem, 6vw, 5rem) clamp(1.25rem, 5vw, 4rem)',
-        borderTop: '1px solid rgba(196,154,26,0.2)',
-        borderBottom: '1px solid rgba(196,154,26,0.2)',
+        borderTop: '1px solid rgba(124,58,237,0.12)',
+        borderBottom: '1px solid rgba(124,58,237,0.12)',
       }}>
         <div style={{ maxWidth: '860px', margin: '0 auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(2rem, 5vw, 4rem)', alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'clamp(2rem, 5vw, 4rem)', alignItems: 'center' }}>
             <div>
               <h2 style={{
                 fontSize: 'clamp(1.75rem, 4vw, 2.5rem)',
                 fontWeight: 900,
-                color: '#2A1A00',
+                color: BB.ink,
                 letterSpacing: '-0.025em',
                 lineHeight: 1.1,
                 marginBottom: '1.5rem',
@@ -390,37 +301,45 @@ export default function HomePage() {
                 {BENEFICIOS.map((b) => (
                   <div key={b.texto} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
                     <span style={{ fontSize: '1.125rem', flexShrink: 0, marginTop: 1 }}>{b.icon}</span>
-                    <span style={{ fontSize: '0.9375rem', color: '#4A3000', lineHeight: 1.5 }}>{b.texto}</span>
+                    <span style={{ fontSize: '0.9375rem', color: '#3b1a6b', lineHeight: 1.5 }}>{b.texto}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Categorías */}
             <div>
-              <p style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#C49A1A', marginBottom: '1rem' }}>
+              <p style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: BB.accent, marginBottom: '1rem' }}>
                 Variedad de categorías
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                 {CATEGORIAS.map((cat) => (
-                  <div
-                    key={cat.nombre}
+                  <span
+                    key={cat.slug}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '0.4rem',
-                      background: 'white',
-                      border: '1px solid rgba(196,154,26,0.3)',
+                      gap: '8px',
+                      padding: '6px 16px',
                       borderRadius: '999px',
-                      padding: '0.4rem 0.875rem',
-                      fontSize: '0.8125rem',
-                      fontWeight: 600,
-                      color: '#4A3000',
+                      backgroundColor: cat.dark,
+                      color: '#fff',
+                      fontSize: '0.75rem',
+                      fontWeight: 800,
+                      whiteSpace: 'nowrap',
+                      lineHeight: 1,
                     }}
                   >
-                    <span>{cat.emoji}</span>
-                    <span>{cat.nombre}</span>
-                  </div>
+                    <span style={{
+                      width: 18, height: 18, display: 'inline-block',
+                      backgroundColor: cat.main,
+                      WebkitMaskImage: `url(/icons/categorias/${cat.slug === 'variedad' ? 'variedad' : cat.slug}.svg)`,
+                      maskImage: `url(/icons/categorias/${cat.slug === 'variedad' ? 'variedad' : cat.slug}.svg)`,
+                      WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+                      WebkitMaskSize: 'contain', maskSize: 'contain',
+                      flexShrink: 0,
+                    }} />
+                    {cat.nombre}
+                  </span>
                 ))}
               </div>
             </div>
@@ -431,14 +350,14 @@ export default function HomePage() {
       {/* ── Cómo funciona ─────────────────────────────────── */}
       <section style={{
         padding: 'clamp(3.5rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem)',
-        background: '#FFFDF0',
+        background: BB.xpale,
       }}>
         <div style={{ maxWidth: '860px', margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
             <h2 style={{
               fontSize: 'clamp(1.75rem, 4vw, 2.5rem)',
               fontWeight: 900,
-              color: '#2A1A00',
+              color: BB.ink,
               letterSpacing: '-0.025em',
               lineHeight: 1.1,
             }}>
@@ -452,8 +371,8 @@ export default function HomePage() {
                   width: 48,
                   height: 48,
                   borderRadius: '14px',
-                  background: '#2A1A00',
-                  color: '#E8C000',
+                  background: BB.ink,
+                  color: BB.light,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -463,10 +382,10 @@ export default function HomePage() {
                 }}>
                   {paso.num}
                 </div>
-                <h3 style={{ fontWeight: 800, fontSize: '0.9375rem', color: '#2A1A00', lineHeight: 1.3 }}>
+                <h3 style={{ fontWeight: 800, fontSize: '0.9375rem', color: BB.ink, lineHeight: 1.3 }}>
                   {paso.titulo}
                 </h3>
-                <p style={{ fontSize: '0.9375rem', color: '#5A3800', lineHeight: 1.6 }}>
+                <p style={{ fontSize: '0.9375rem', color: '#3b1a6b', lineHeight: 1.6 }}>
                   {paso.desc}
                 </p>
               </div>
@@ -477,11 +396,11 @@ export default function HomePage() {
 
       {/* ── Para quién es ─────────────────────────────────── */}
       <section style={{
-        background: '#2A1A00',
+        background: BB.ink,
         padding: 'clamp(3rem, 6vw, 5rem) clamp(1.25rem, 5vw, 4rem)',
       }}>
         <div style={{ maxWidth: '860px', margin: '0 auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem', alignItems: 'start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '2rem', alignItems: 'start' }}>
             <div>
               <h2 style={{
                 fontSize: 'clamp(1.75rem, 4vw, 2.5rem)',
@@ -494,7 +413,8 @@ export default function HomePage() {
                 #EresBambinos si tienes una terraza, salón o haces eventos.
               </h2>
               <p style={{ color: 'rgba(255,255,255,0.87)', fontSize: '1rem', lineHeight: 1.7 }}>
-                Conocemos la pasión con la que haces tu trabajo y el esfuerzo que a través del tiempo ha posicionado tu negocio. Nos encantaría sumar esfuerzos contigo para seguir creciendo juntos.
+                Conocemos la pasión con la que haces tu trabajo y el esfuerzo que a través del tiempo ha posicionado tu negocio.
+                Nos encantaría sumar esfuerzos contigo para seguir creciendo juntos.
               </p>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -525,7 +445,7 @@ export default function HomePage() {
 
       {/* ── CTA Final ─────────────────────────────────────── */}
       <section style={{
-        background: '#C49A1A',
+        background: BB.accent,
         padding: 'clamp(3.5rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem)',
         textAlign: 'center',
       }}>
@@ -552,8 +472,8 @@ export default function HomePage() {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '0.625rem',
-                background: '#2A1A00',
-                color: '#E8C000',
+                background: BB.ink,
+                color: BB.light,
                 padding: '0.875rem 2rem',
                 borderRadius: '14px',
                 fontWeight: 900,
@@ -573,7 +493,7 @@ export default function HomePage() {
 
       {/* ── Footer mínimo ─────────────────────────────────── */}
       <footer style={{
-        background: '#1A0D00',
+        background: BB.footer,
         padding: '1.5rem clamp(1.25rem, 5vw, 4rem)',
         textAlign: 'center',
       }}>
@@ -586,5 +506,6 @@ export default function HomePage() {
       </footer>
 
     </main>
+    </>
   )
 }
