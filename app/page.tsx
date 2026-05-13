@@ -107,6 +107,17 @@ export default function HomePage() {
         </Link>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Link
+            href="/guia-excelencia"
+            style={{
+              color: '#8A5C00',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            ⭐ Guía de Excelencia
+          </Link>
+          <Link
             href="/admin"
             style={{
               color: '#8A5C00',
