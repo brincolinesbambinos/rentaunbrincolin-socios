@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { WaLink } from './components/WaLink'
 
 export const metadata: Metadata = {
   title: 'Business Partner · Brincolines Bambinos',
@@ -65,23 +66,9 @@ const PASOS = [
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
-// ─── Rotación de WhatsApp ────────────────────────────────────────────────────
-// Rota diariamente (día del mes % cantidad de números). Consistente entre
-// server render y client hydration dentro del mismo día.
-
-const WA_PHONES = ['523318033172', '523320781405', '523323484073']
-
-function getWaUrl() {
-  const idx = new Date().getDate() % WA_PHONES.length
-  const phone = WA_PHONES[idx]
-  const msg = encodeURIComponent(
-    'Hola, me interesa el programa Business Partner de Brincolines Bambinos. ¿Me pueden dar más información? ¿En qué ciudad están disponibles?'
-  )
-  return `https://wa.me/${phone}?text=${msg}`
-}
+const WA_MSG = 'Hola, me interesa el programa Business Partner de Brincolines Bambinos. ¿Me pueden dar más información?'
 
 export default function HomePage() {
-  const waUrl = getWaUrl()
 
   return (
     <>
@@ -138,10 +125,8 @@ export default function HomePage() {
               Acceso socios
             </Link>
           </div>
-          <a
-            href={waUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <WaLink
+            msg={WA_MSG}
             style={{
               background: BB.accent,
               color: 'white',
@@ -154,7 +139,7 @@ export default function HomePage() {
             }}
           >
             Quiero ser socio →
-          </a>
+          </WaLink>
         </div>
       </nav>
 
@@ -215,10 +200,8 @@ export default function HomePage() {
           </p>
 
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <a
-              href={waUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <WaLink
+              msg={WA_MSG}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -234,7 +217,7 @@ export default function HomePage() {
               }}
             >
               💬 Quiero ser socio
-            </a>
+            </WaLink>
             <a
               href="https://www.brincolinesbambinos.com"
               target="_blank"
@@ -464,10 +447,8 @@ export default function HomePage() {
             Sin costo de registro. Sin inventario. Solo tu red de contactos y nuestra operación. Escríbenos hoy y te explicamos todo.
           </p>
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <a
-              href={waUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+            <WaLink
+              msg={WA_MSG}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -483,7 +464,7 @@ export default function HomePage() {
               }}
             >
               💬 Escribir por WhatsApp
-            </a>
+            </WaLink>
           </div>
           <p style={{ color: 'rgba(255,255,255,0.80)', fontSize: '0.875rem', marginTop: '1.25rem' }}>
             33 1803 3172 · @BrincolinesBambinos · brincolinesbambinos.com
