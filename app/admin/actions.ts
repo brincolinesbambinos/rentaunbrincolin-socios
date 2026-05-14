@@ -64,7 +64,11 @@ export async function savePartner(formData: FormData) {
     const file = formData.get('logo_file') as File | null
     if (file && file.size > 0) {
       console.log('Uploading file:', file.name, 'size:', file.size)
-      const fileExt = file.name.split('.').pop()
+      let fileExt = file.name.split('.').pop()
+      if (file.type === 'image/webp') fileExt = 'webp'
+      else if (file.type === 'image/png') fileExt = 'png'
+      else if (file.type === 'image/jpeg') fileExt = 'jpg'
+      
       const fileName = `${slug}-${Date.now()}.${fileExt}`
       
       const arrayBuffer = await file.arrayBuffer()

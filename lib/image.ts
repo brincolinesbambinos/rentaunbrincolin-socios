@@ -54,7 +54,7 @@ export async function compressImage(
               reject(new Error('Canvas toBlob failed'));
             }
           },
-          'image/jpeg',
+          'image/webp',
           quality
         );
       };
