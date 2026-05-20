@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { WaLink } from './components/WaLink'
 
 export const metadata: Metadata = {
   title: 'Business Partner · Brincolines Bambinos',
@@ -103,6 +102,7 @@ export default function HomePage() {
   return (
     <>
     <style>{`
+      html { scroll-behavior: smooth; }
       .partners-nav-mid { display: flex; align-items: center; gap: 1rem; }
       @media (max-width: 680px) {
         .partners-nav-mid { display: none !important; }
@@ -157,8 +157,8 @@ export default function HomePage() {
               Acceso socios
             </Link>
           </div>
-          <WaLink
-            msg={WA_MSG}
+          <a
+            href="#agentes"
             style={{
               background: BB.accent,
               color: 'white',
@@ -171,7 +171,7 @@ export default function HomePage() {
             }}
           >
             Quiero ser socio →
-          </WaLink>
+          </a>
         </div>
       </nav>
 
@@ -232,8 +232,8 @@ export default function HomePage() {
           </p>
 
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <WaLink
-              msg={WA_MSG}
+            <a
+              href="#agentes"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -249,7 +249,7 @@ export default function HomePage() {
               }}
             >
               💬 Quiero ser socio
-            </WaLink>
+            </a>
             <a
               href="https://www.brincolinesbambinos.com"
               target="_blank"
@@ -459,7 +459,7 @@ export default function HomePage() {
       </section>
 
       {/* ── Agentes ─────────────────────────────────────── */}
-      <section style={{
+      <section id="agentes" style={{
         background: BB.pale,
         padding: 'clamp(3.5rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem)',
         borderTop: '1px solid rgba(124,58,237,0.12)',
@@ -566,8 +566,8 @@ export default function HomePage() {
             Sin costo de registro. Sin inventario. Solo tu red de contactos y nuestra operación. Escríbenos hoy y te explicamos todo.
           </p>
           <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <WaLink
-              msg={WA_MSG}
+            <a
+              href="#agentes"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -582,8 +582,8 @@ export default function HomePage() {
                 letterSpacing: '0.02em',
               }}
             >
-              💬 Escribir por WhatsApp
-            </WaLink>
+              💬 Contactar a mi agente
+            </a>
           </div>
           <p style={{ color: 'rgba(255,255,255,0.80)', fontSize: '0.875rem', marginTop: '1.25rem' }}>
             @BrincolinesBambinos · brincolinesbambinos.com
