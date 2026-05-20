@@ -30,12 +30,12 @@ export default async function ProductPage({
   searchParams
 }: { 
   params: Promise<{ partner: string, branch: string, slug: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string; wl?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string }>
 }) {
   const { partner: partnerSlug, branch: branchSlug, slug } = await params
-  const { active_whatsapp_slug, wl } = await searchParams
-  const hidePrice = wl === '1'
-  const wlSuffix = hidePrice ? '?wl=1' : ''
+  const { active_whatsapp_slug, sp } = await searchParams
+  const hidePrice = sp === '1'
+  const wlSuffix = hidePrice ? '?sp=1' : ''
 
   const partner = await getPartnerBySlug(partnerSlug)
   if (!partner) notFound()

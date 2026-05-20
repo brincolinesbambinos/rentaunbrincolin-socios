@@ -50,11 +50,11 @@ export default async function CatalogoPage({
   searchParams
 }: { 
   params: Promise<{ partner: string, branch: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string; wl?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string }>
 }) {
   const { partner: partnerSlug, branch: branchSlug } = await params
-  const { active_whatsapp_slug, wl } = await searchParams
-  const hidePrice = wl === '1'
+  const { active_whatsapp_slug, sp } = await searchParams
+  const hidePrice = sp === '1'
   const partner = await getPartnerBySlug(partnerSlug)
   
   if (!partner) notFound()

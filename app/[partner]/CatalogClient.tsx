@@ -114,7 +114,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       ? `/${partner.slug}/${activeSlug}`
       : `/${partner.slug}`
 
-    const wlSuffix = hidePrice ? '?wl=1' : ''
+    const wlSuffix = hidePrice ? '?sp=1' : ''
 
     if (branchSlug) {
       router.push(`${baseUrl}/${branchSlug}/catalogo/${product.slug}${wlSuffix}`)

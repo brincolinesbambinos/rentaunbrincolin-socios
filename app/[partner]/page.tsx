@@ -46,15 +46,16 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
 
 import { getContrastColor } from "@/lib/colors"
 
-export default async function PartnerRootPage({ 
+export default async function PartnerRootPage({
   params,
   searchParams
-}: { 
+}: {
   params: Promise<{ partner: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string }>
 }) {
   const { partner: slug } = await params
-  const { active_whatsapp_slug } = await searchParams
+  const { active_whatsapp_slug, sp } = await searchParams
+  const spSuffix = sp === '1' ? '?sp=1' : ''
   const partner = await getPartnerBySlug(slug)
   
   if (!partner) notFound()
@@ -66,12 +67,13 @@ export default async function PartnerRootPage({
     const products = await getAllVisibleProducts()
     const featured = products.filter(p => p.popular).slice(0, 6)
     return (
-      <CatalogClient 
-        partner={partner} 
-        products={products} 
-        featured={featured} 
+      <CatalogClient
+        partner={partner}
+        products={products}
+        featured={featured}
         pixelId={null}
         activeSlug={active_whatsapp_slug || slug}
+        hidePrice={sp === '1'}
       />
     )
   }
@@ -80,9 +82,9 @@ export default async function PartnerRootPage({
   if (branchIds.length === 1) {
     const branches = await getPartnerBranches(branchIds)
     if (branches.length > 0) {
-      const target = active_whatsapp_slug 
-        ? `/${slug}/${active_whatsapp_slug}/${branches[0].slug}/catalogo`
-        : `/${slug}/${branches[0].slug}/catalogo`
+      const target = active_whatsapp_slug
+        ? `/${slug}/${active_whatsapp_slug}/${branches[0].slug}/catalogo${spSuffix}`
+        : `/${slug}/${branches[0].slug}/catalogo${spSuffix}`
       redirect(target)
     }
   }
@@ -117,9 +119,9 @@ export default async function PartnerRootPage({
 
         <div className="grid gap-4">
           {branches.map(branch => (
-            <Link 
+            <Link
               key={branch.id}
-              href={active_whatsapp_slug ? `/${slug}/${active_whatsapp_slug}/${branch.slug}/catalogo` : `/${slug}/${branch.slug}/catalogo`}
+              href={active_whatsapp_slug ? `/${slug}/${active_whatsapp_slug}/${branch.slug}/catalogo${spSuffix}` : `/${slug}/${branch.slug}/catalogo${spSuffix}`}
               className="group relative bg-white/95 backdrop-blur-sm p-6 rounded-2xl hover:scale-[1.02] active:scale-95 transition-all shadow-xl text-left flex items-center justify-between"
             >
               <div>
