@@ -16,6 +16,7 @@ interface Props {
   branchName?: string | null
   branchSlug?: string | null
   activeSlug?: string | null
+  hidePrice?: boolean
 }
 
 const CATEGORIES = ["Todos", "Acuático", "Clásico", "Destreza", "Interactivo", "Mecánico", "Personajes", "Princesas", "Variedad"]
@@ -39,7 +40,7 @@ const getFinalPrice = (product: Product) => {
   return product.price ?? 0
 }
 
-export default function CatalogClient({ partner, products, featured = [], pixelId, branchName, branchSlug, activeSlug }: Props) {
+export default function CatalogClient({ partner, products, featured = [], pixelId, branchName, branchSlug, activeSlug, hidePrice }: Props) {
   const router = useRouter()
   const [filtersOpen, setFiltersOpen] = useState(false)
 
@@ -109,15 +110,17 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
       value: getFinalPrice(product) 
     })
     
-    const baseUrl = activeSlug && activeSlug.toLowerCase() !== partner.slug.toLowerCase() 
-      ? `/${partner.slug}/${activeSlug}` 
+    const baseUrl = activeSlug && activeSlug.toLowerCase() !== partner.slug.toLowerCase()
+      ? `/${partner.slug}/${activeSlug}`
       : `/${partner.slug}`
 
+    const wlSuffix = hidePrice ? '?wl=1' : ''
+
     if (branchSlug) {
-      router.push(`${baseUrl}/${branchSlug}/catalogo/${product.slug}`)
+      router.push(`${baseUrl}/${branchSlug}/catalogo/${product.slug}${wlSuffix}`)
     } else {
       // Global fallback if no branch
-      router.push(`${baseUrl}/catalogo/${product.slug}`)
+      router.push(`${baseUrl}/catalogo/${product.slug}${wlSuffix}`)
     }
   }
 
@@ -243,19 +246,21 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
         </div>
 
         {filtersOpen && (
-          <div style={{ 
+          <div style={{
             marginTop: 20, paddingTop: 20, borderTop: '1px dashed #E5E3DC',
             display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 24
           }}>
-            <div>
-              <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Precio Máximo</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <input type="range" min={3000} max={12000} step={500} value={maxPrice}
-                  onChange={e => setMaxPrice(Number(e.target.value))}
-                  style={{ flex: 1, accentColor: partner.primary_color }} />
-                <span style={{ fontSize: 14, fontWeight: 800, color: partner.primary_color, minWidth: 70 }}>{fmt(maxPrice)}</span>
+            {!hidePrice && (
+              <div>
+                <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Precio Máximo</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <input type="range" min={3000} max={12000} step={500} value={maxPrice}
+                    onChange={e => setMaxPrice(Number(e.target.value))}
+                    style={{ flex: 1, accentColor: partner.primary_color }} />
+                  <span style={{ fontSize: 14, fontWeight: 800, color: partner.primary_color, minWidth: 70 }}>{fmt(maxPrice)}</span>
+                </div>
               </div>
-            </div>
+            )}
             <div>
               <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Etapa / Edad</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -302,7 +307,9 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
               <div style={{ padding: "1rem 1.1rem 1.2rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>{product.name}</h3>
-                  <span style={{ fontSize: 16, fontWeight: 800, color: partner.primary_color, whiteSpace: "nowrap" }}>{fmt(price)}</span>
+                  {!hidePrice && (
+                    <span style={{ fontSize: 16, fontWeight: 800, color: partner.primary_color, whiteSpace: "nowrap" }}>{fmt(price)}</span>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 50, background: c.light, color: c.bg, fontWeight: 600 }}>{catName}</span>

@@ -30,10 +30,12 @@ export default async function ProductPage({
   searchParams
 }: { 
   params: Promise<{ partner: string, branch: string, slug: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; wl?: string }>
 }) {
   const { partner: partnerSlug, branch: branchSlug, slug } = await params
-  const { active_whatsapp_slug } = await searchParams
+  const { active_whatsapp_slug, wl } = await searchParams
+  const hidePrice = wl === '1'
+  const wlSuffix = hidePrice ? '?wl=1' : ''
 
   const partner = await getPartnerBySlug(partnerSlug)
   if (!partner) notFound()
@@ -71,22 +73,23 @@ export default async function ProductPage({
   const activeWhatsApp = partner.links?.find(l => l.slug.toLowerCase() === activeSlug.toLowerCase())?.whatsapp || partner.whatsapp
 
   const backUrl = active_whatsapp_slug && active_whatsapp_slug.toLowerCase() !== partnerSlug.toLowerCase()
-    ? `/${partnerSlug}/${active_whatsapp_slug}/${branchSlug}/catalogo`
-    : `/${partnerSlug}/${branchSlug}/catalogo`
+    ? `/${partnerSlug}/${active_whatsapp_slug}/${branchSlug}/catalogo${wlSuffix}`
+    : `/${partnerSlug}/${branchSlug}/catalogo${wlSuffix}`
 
   return (
     <>
-      <script 
-        type="application/ld+json" 
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(productSchema) }} 
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(productSchema) }}
       />
-      <ProductDetailClient 
-        product={product} 
-        partner={partner} 
+      <ProductDetailClient
+        product={product}
+        partner={partner}
         similar={similar}
         branchName={activeBranch.name}
         backUrl={backUrl}
         activeWhatsApp={activeWhatsApp}
+        hidePrice={hidePrice}
       />
     </>
   )

@@ -12,9 +12,10 @@ interface Props {
   branchName: string
   backUrl: string
   activeWhatsApp?: string
+  hidePrice?: boolean
 }
 
-export default function ProductDetailClient({ product, partner, similar, branchName, backUrl, activeWhatsApp }: Props) {
+export default function ProductDetailClient({ product, partner, similar, branchName, backUrl, activeWhatsApp, hidePrice }: Props) {
   const whatsappUrl = buildWhatsAppUrl(partner, product.name, branchName, activeWhatsApp)
 
   return (
@@ -61,9 +62,11 @@ export default function ProductDetailClient({ product, partner, similar, branchN
               )}
             </div>
             <h1 className="text-3xl font-black text-gray-900 leading-tight">{product.name}</h1>
-            <p className="text-2xl font-bold text-[var(--color-primary)] mt-2">
-              ${product.price?.toLocaleString()} <span className="text-sm font-normal text-gray-400">MXN</span>
-            </p>
+            {!hidePrice && (
+              <p className="text-2xl font-bold text-[var(--color-primary)] mt-2">
+                ${product.price?.toLocaleString()} <span className="text-sm font-normal text-gray-400">MXN</span>
+              </p>
+            )}
           </div>
 
           <p className="text-gray-600 leading-relaxed text-lg">
@@ -131,7 +134,9 @@ export default function ProductDetailClient({ product, partner, similar, branchN
                 </div>
                 <div className="p-4">
                   <span className="block font-bold text-gray-900 truncate">{p.name}</span>
-                  <span className="text-sm font-bold text-[var(--color-primary)]">${p.price?.toLocaleString()}</span>
+                  {!hidePrice && (
+                    <span className="text-sm font-bold text-[var(--color-primary)]">${p.price?.toLocaleString()}</span>
+                  )}
                 </div>
               </Link>
             ))}
