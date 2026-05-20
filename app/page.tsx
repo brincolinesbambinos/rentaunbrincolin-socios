@@ -64,6 +64,36 @@ const PASOS = [
   { num: '04', titulo: 'Cobra tu comisión',       desc: 'Recibes tu comisión puntual, sin complicaciones, en cada renta cerrada.' },
 ]
 
+const AGENTES = [
+  {
+    ciudad: 'Guadalajara',
+    agentes: [
+      { nombre: 'Fabiola', tel: '33 1803 3172', link: '5213318033172' },
+      { nombre: 'Brenda', tel: '33 2078 1405', link: '5213320781405' },
+      { nombre: 'Mariana', tel: '33 2348 4073', link: '5213323484073' },
+    ]
+  },
+  {
+    ciudad: 'Monterrey',
+    agentes: [
+      { nombre: 'Violeta', tel: '81 2748 5700', link: '5218127485700' },
+      { nombre: 'Sandra', tel: '81 2732 9628', link: '5218127329628' },
+    ]
+  },
+  {
+    ciudad: 'León',
+    agentes: [
+      { nombre: 'Anahí', tel: '477 420 2336', link: '5214774202336' },
+    ]
+  },
+  {
+    ciudad: 'Los Angeles',
+    agentes: [
+      { nombre: 'Agustín', tel: '626 940 6633', link: '16269406633' },
+    ]
+  }
+]
+
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 const WA_MSG = 'Hola, me interesa el programa Business Partner de Brincolines Bambinos. ¿Me pueden dar más información?'
@@ -77,6 +107,8 @@ export default function HomePage() {
       @media (max-width: 680px) {
         .partners-nav-mid { display: none !important; }
       }
+      .agent-card { background: #f8f5ff; }
+      .agent-card:hover { background: #f3f0ff; }
     `}</style>
     <main style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: BB.xpale, color: BB.ink, minHeight: '100vh', overflowX: 'hidden' }}>
 
@@ -426,6 +458,93 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* ── Agentes ─────────────────────────────────────── */}
+      <section style={{
+        background: BB.pale,
+        padding: 'clamp(3.5rem, 7vw, 5.5rem) clamp(1.25rem, 5vw, 4rem)',
+        borderTop: '1px solid rgba(124,58,237,0.12)',
+        borderBottom: '1px solid rgba(124,58,237,0.12)',
+      }}>
+        <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+          <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
+            <h2 style={{
+              fontSize: 'clamp(1.75rem, 4vw, 2.5rem)',
+              fontWeight: 900,
+              color: BB.ink,
+              letterSpacing: '-0.025em',
+              lineHeight: 1.1,
+            }}>
+              Contacta a tu agente más cercano
+            </h2>
+            <p style={{ color: '#3b1a6b', fontSize: '1.0625rem', marginTop: '1rem' }}>
+              Nuestro equipo está listo para ayudarte a iniciar y gestionar tus rentas.
+            </p>
+          </div>
+          
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: '1.5rem',
+          }}>
+            {AGENTES.map(region => (
+              <div key={region.ciudad} style={{
+                background: 'white',
+                borderRadius: '16px',
+                padding: '1.5rem',
+                border: '1px solid rgba(124,58,237,0.1)',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+              }}>
+                <h3 style={{
+                  fontSize: '1.125rem',
+                  fontWeight: 800,
+                  color: BB.accent,
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  paddingBottom: '0.75rem',
+                  borderBottom: '1px solid rgba(124,58,237,0.1)'
+                }}>
+                  📍 {region.ciudad}
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                  {region.agentes.map(agente => (
+                    <a
+                      key={agente.nombre}
+                      href={`https://wa.me/${agente.link}?text=${encodeURIComponent(WA_MSG)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="agent-card"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        textDecoration: 'none',
+                        padding: '0.75rem',
+                        borderRadius: '8px',
+                        transition: 'background 0.2s',
+                        border: '1px solid rgba(124,58,237,0.05)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
+                        <span style={{ fontSize: '0.9375rem', fontWeight: 700, color: BB.ink }}>{agente.nombre}</span>
+                        <span style={{ fontSize: '0.8125rem', color: '#6b4b9b', fontWeight: 500 }}>{agente.tel}</span>
+                      </div>
+                      <span style={{
+                        width: 32, height: 32, borderRadius: '50%', background: '#25D366', color: 'white',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem'
+                      }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── CTA Final ─────────────────────────────────────── */}
       <section style={{
         background: BB.accent,
@@ -467,7 +586,7 @@ export default function HomePage() {
             </WaLink>
           </div>
           <p style={{ color: 'rgba(255,255,255,0.80)', fontSize: '0.875rem', marginTop: '1.25rem' }}>
-            33 1803 3172 · @BrincolinesBambinos · brincolinesbambinos.com
+            @BrincolinesBambinos · brincolinesbambinos.com
           </p>
         </div>
       </section>

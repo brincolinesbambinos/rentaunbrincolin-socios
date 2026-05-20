@@ -1,5 +1,8 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { WaLink } from '../components/WaLink'
+
+const WA_MSG = 'Hola, me interesa ser parte de la Guía de Proveedores de Excelencia de Brincolines Bambinos.'
 
 export const metadata: Metadata = {
   title: 'Guía de Excelencia · Brincolines Bambinos Partners',
@@ -73,20 +76,9 @@ const BENEFICIOS = [
   },
 ]
 
-// ─── Rotación de WhatsApp ────────────────────────────────────────────────────
-
-const WA_PHONES = ['523318033172', '523320781405', '523323484073']
-
-function getGuiaWaUrl() {
-  const idx = new Date().getDate() % WA_PHONES.length
-  const phone = WA_PHONES[idx]
-  return `https://wa.me/${phone}?text=${encodeURIComponent('Hola, me interesa ser parte de la Guía de Proveedores de Excelencia de Brincolines Bambinos.')}`
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function GuiaExcelenciaPage() {
-  const waUrl = getGuiaWaUrl()
   return (
     <main style={{
       background: 'linear-gradient(to bottom, #0a0a12 0%, #0f0f1e 100%)',
@@ -178,8 +170,8 @@ export default function GuiaExcelenciaPage() {
           y queremos que tú y tu equipo sean parte de esta meta.
         </p>
 
-        <a
-          href="#inscribirse"
+        <WaLink
+          msg={WA_MSG}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
             background: 'linear-gradient(135deg, #ECCE0C, #b8960a)',
@@ -194,7 +186,7 @@ export default function GuiaExcelenciaPage() {
           }}
         >
           Quiero ser parte →
-        </a>
+        </WaLink>
       </section>
 
       {/* ── Concepto: la guía ── */}
@@ -404,10 +396,8 @@ export default function GuiaExcelenciaPage() {
             Esta presentación-invitación fue enviada solo a proveedores seleccionados con los que sabemos que podemos
             trabajar. Si quieres iniciar el proceso de revisión y autorización de tu negocio, cuéntanos.
           </p>
-          <a
-            href={waUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <WaLink
+            msg={WA_MSG}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '0.625rem',
               background: 'linear-gradient(135deg, #ECCE0C, #b8960a)',
@@ -422,7 +412,7 @@ export default function GuiaExcelenciaPage() {
             }}
           >
             💬 Quiero iniciar el proceso
-          </a>
+          </WaLink>
           <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.75rem', marginTop: '1.25rem' }}>
             Tu participación no tiene ningún costo. Solo buscamos que mantengas la excelencia.
           </p>
