@@ -46,6 +46,8 @@ export async function generateMetadata({ params }: { params: Promise<{ partner: 
 
 import { getContrastColor } from "@/lib/colors"
 
+export const dynamic = 'force-dynamic'
+
 export default async function PartnerRootPage({
   params,
   searchParams
