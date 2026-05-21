@@ -358,12 +358,12 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           <button
             onClick={() => setVisibleCount(v => v + PAGE_SIZE)}
             style={{
-              padding: "14px 40px", borderRadius: 50, border: "2px solid var(--color-primary)",
-              background: "#fff", color: "var(--color-primary)", fontSize: 14, fontWeight: 700,
-              cursor: "pointer", transition: "all 0.2s"
+              padding: "14px 40px", borderRadius: 50, border: "none",
+              background: "var(--color-primary)", color: "var(--text-on-primary)", fontSize: 14, fontWeight: 700,
+              cursor: "pointer", transition: "opacity 0.2s", opacity: 1
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--color-primary)"; (e.currentTarget as HTMLButtonElement).style.color = "#fff" }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "#fff"; (e.currentTarget as HTMLButtonElement).style.color = "var(--color-primary)" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.85" }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "1" }}
           >
             Ver más ({filtered.length - visibleCount} restantes)
           </button>
