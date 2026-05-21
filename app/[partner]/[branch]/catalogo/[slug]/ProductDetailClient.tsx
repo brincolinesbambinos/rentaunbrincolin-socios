@@ -64,7 +64,7 @@ export default function ProductDetailClient({ product, partner, similar, branchN
             </div>
             <h1 className="text-3xl font-black text-gray-900 leading-tight">{product.name}</h1>
             {!hidePrice && (
-              <p className="text-2xl font-bold text-[var(--color-primary)] mt-2">
+              <p className="text-2xl font-bold mt-2" style={{ color: '#111827' }}>
                 ${product.price?.toLocaleString()} <span className="text-sm font-normal text-gray-400">MXN</span>
               </p>
             )}
@@ -136,7 +136,7 @@ export default function ProductDetailClient({ product, partner, similar, branchN
                 <div className="p-4">
                   <span className="block font-bold text-gray-900 truncate">{p.name}</span>
                   {!hidePrice && (
-                    <span className="text-sm font-bold text-[var(--color-primary)]">${p.price?.toLocaleString()}</span>
+                    <span className="text-sm font-bold" style={{ color: '#111827' }}>${p.price?.toLocaleString()}</span>
                   )}
                 </div>
               </Link>

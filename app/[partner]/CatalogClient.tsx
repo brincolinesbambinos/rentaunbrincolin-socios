@@ -325,7 +325,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>{product.name}</h3>
                   {!hidePrice && (
-                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--color-primary)', whiteSpace: "nowrap" }}>{fmt(price)}</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: '#111827', whiteSpace: "nowrap" }}>{fmt(price)}</span>
                   )}
                 </div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
