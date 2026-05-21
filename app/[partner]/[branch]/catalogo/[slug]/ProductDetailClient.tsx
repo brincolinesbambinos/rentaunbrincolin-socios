@@ -2,6 +2,7 @@
 
 import { Product, Partner } from '@/types'
 import { buildWhatsAppUrl } from '@/lib/whatsapp'
+import { getOptimizedImageUrl } from '@/lib/image'
 import { ArrowLeft, MessageCircle, Maximize2, Users, Clock, Ruler } from 'lucide-react'
 import Link from 'next/link'
 
@@ -35,13 +36,13 @@ export default function ProductDetailClient({ product, partner, similar, branchN
         {/* Image Gallery */}
         <div className="space-y-4">
           <div className="aspect-square rounded-3xl overflow-hidden bg-gray-100 border border-gray-100">
-            <img src={product.image_main || "/placeholder.png"} alt={product.name} className="w-full h-full object-contain" />
+            <img src={getOptimizedImageUrl(product.image_main, 800, 80)} alt={product.name} loading="eager" decoding="async" className="w-full h-full object-contain" />
           </div>
           {product.image_gallery && product.image_gallery.length > 0 && (
             <div className="grid grid-cols-4 gap-2">
               {product.image_gallery.map((img, i) => (
                 <div key={i} className="aspect-square rounded-xl overflow-hidden border border-gray-100">
-                  <img src={img} alt={`${product.name} ${i}`} className="w-full h-full object-cover" />
+                  <img src={getOptimizedImageUrl(img, 200, 70)} alt={`${product.name} ${i}`} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </div>
               ))}
             </div>
@@ -130,7 +131,7 @@ export default function ProductDetailClient({ product, partner, similar, branchN
                 className="bg-white rounded-2xl overflow-hidden border border-gray-100 shadow-sm hover:shadow-md transition-shadow group"
               >
                 <div className="aspect-[4/3] bg-gray-50 overflow-hidden">
-                  <img src={p.image_main || "/placeholder.png"} alt={p.name} className="w-full h-full object-contain group-hover:scale-110 transition-transform" />
+                  <img src={getOptimizedImageUrl(p.image_main, 320, 70)} alt={p.name} loading="lazy" decoding="async" className="w-full h-full object-contain group-hover:scale-110 transition-transform" />
                 </div>
                 <div className="p-4">
                   <span className="block font-bold text-gray-900 truncate">{p.name}</span>

@@ -3,10 +3,13 @@
 import { useState, useMemo } from "react"
 import { Partner, Product } from "@/types"
 import { buildWhatsAppUrl } from "@/lib/whatsapp"
+import { getOptimizedImageUrl } from "@/lib/image"
 import { useRouter } from "next/navigation"
 
 import PartnerPixel from "@/components/PartnerPixel"
 import PartnerGTM from "@/components/PartnerGTM"
+
+const PAGE_SIZE = 12
 
 interface Props {
   partner: Partner
@@ -76,8 +79,15 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
   const [activeStage, setActiveStage]       = useState("Todas")
   const [activeSize, setActiveSize]         = useState("Todas")
   const [searchTerm, setSearchTerm]         = useState("")
+  const [visibleCount, setVisibleCount]     = useState(PAGE_SIZE)
 
   const isFilterActive = activeCategory !== "Todos" || maxPrice < 12000 || activeStage !== "Todas" || activeSize !== "Todas" || searchTerm !== ""
+
+  // Reset pagination when filters change
+  const resetAndSet = <T,>(setter: (v: T) => void) => (v: T) => {
+    setter(v)
+    setVisibleCount(PAGE_SIZE)
+  }
 
   const filtered = useMemo(() => products.filter(p => {
     const catName = p.categories?.name || "Variedad"
@@ -182,7 +192,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
               type="text" 
               placeholder="Buscar por nombre o descripción..." 
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => resetAndSet(setSearchTerm)(e.target.value)}
               style={{
                 width: '100%', padding: '12px 16px 12px 42px', borderRadius: 14,
                 border: '1.5px solid #E5E3DC', fontSize: 14, outline: 'none',
@@ -196,7 +206,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             {isFilterActive && (
               <button
                 onClick={() => {
-                  setActiveCategory("Todos"); setMaxPrice(12000); setActiveStage("Todas"); setActiveSize("Todas"); setSearchTerm("")
+                  setActiveCategory("Todos"); setMaxPrice(12000); setActiveStage("Todas"); setActiveSize("Todas"); setSearchTerm(""); setVisibleCount(PAGE_SIZE)
                 }}
                 style={{ padding: '10px 20px', borderRadius: 12, border: 'none', background: '#FFF1F1', color: '#FF4444', fontSize: 13, cursor: 'pointer', fontWeight: 700 }}
               >
@@ -207,7 +217,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
               onClick={() => setFiltersOpen(!filtersOpen)}
               style={{
                 padding: '10px 20px', borderRadius: 12, border: '1.5px solid #E5E3DC',
-                background: filtersOpen ? partner.primary_color : '#fff',
+                background: filtersOpen ? 'var(--color-primary)' : '#fff',
                 color: filtersOpen ? '#fff' : '#666',
                 fontSize: 13, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8
               }}
@@ -224,9 +234,9 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             const colors = cc(cat)
             const isActive = activeCategory === cat
             return (
-              <button 
-                key={cat} 
-                onClick={() => setActiveCategory(cat)} 
+              <button
+                key={cat}
+                onClick={() => resetAndSet(setActiveCategory)(cat)}
                 style={{
                   padding: "10px 20px", borderRadius: 16, border: "none",
                   background: isActive ? colors.bg : colors.light,
@@ -256,8 +266,8 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <input type="range" min={3000} max={12000} step={500} value={maxPrice}
                     onChange={e => setMaxPrice(Number(e.target.value))}
-                    style={{ flex: 1, accentColor: partner.primary_color }} />
-                  <span style={{ fontSize: 14, fontWeight: 800, color: partner.primary_color, minWidth: 70 }}>{fmt(maxPrice)}</span>
+                    style={{ flex: 1, accentColor: 'var(--color-primary)' }} />
+                  <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--color-primary)', minWidth: 70 }}>{fmt(maxPrice)}</span>
                 </div>
               </div>
             )}
@@ -265,11 +275,11 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
               <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Etapa / Edad</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {STAGES.map(stage => (
-                  <button key={stage} onClick={() => setActiveStage(stage)} style={{
+                  <button key={stage} onClick={() => resetAndSet(setActiveStage)(stage)} style={{
                     padding: "6px 14px", borderRadius: 10, border: "1.5px solid",
-                    borderColor: activeStage === stage ? partner.secondary_color : "#E5E3DC",
+                    borderColor: activeStage === stage ? 'var(--color-secondary)' : "#E5E3DC",
                     background: activeStage === stage ? "#FFF5F2" : "#fff",
-                    color: activeStage === stage ? partner.secondary_color : "#888",
+                    color: activeStage === stage ? 'var(--color-secondary)' : "#888",
                     fontSize: 12, cursor: "pointer", fontWeight: 700, transition: "all 0.2s"
                   }}>{stage}</button>
                 ))}
@@ -281,11 +291,12 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
 
       {/* ── PRODUCT GRID ── */}
       <div style={{ padding: "2rem", display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 20, maxWidth: 1280, margin: "0 auto" }}>
-        {filtered.map((product) => {
+        {filtered.slice(0, visibleCount).map((product, idx) => {
           const catName = product.categories?.name || "Variedad"
           const c = cc(catName)
           const price = getFinalPrice(product)
-          
+          const isEager = idx < 6  // First 6 are above-the-fold, load eagerly
+
           return (
             <div key={product.id}
               style={{ background: "#fff", borderRadius: 18, overflow: "hidden", cursor: "pointer", border: "1px solid #EAE8E0", transition: "transform 0.15s" }}
@@ -295,7 +306,13 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
             >
               <div style={{ background: c.light, aspectRatio: "1 / 1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", position: "relative" }}>
                 {product.image_main ? (
-                  <img src={product.image_main} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <img
+                    src={getOptimizedImageUrl(product.image_main, 480, 75)}
+                    alt={product.name}
+                    loading={isEager ? "eager" : "lazy"}
+                    decoding="async"
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
                 ) : (
                   <>
                     <div style={{ fontSize: 56 }}>{c.emoji}</div>
@@ -308,7 +325,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
                   <h3 style={{ fontSize: 14, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>{product.name}</h3>
                   {!hidePrice && (
-                    <span style={{ fontSize: 16, fontWeight: 800, color: partner.primary_color, whiteSpace: "nowrap" }}>{fmt(price)}</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--color-primary)', whiteSpace: "nowrap" }}>{fmt(price)}</span>
                   )}
                 </div>
                 <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
@@ -316,7 +333,7 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
                 </div>
                 <p style={{ fontSize: 12, color: "#999", margin: "0 0 14px", lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{product.description}</p>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <a href={buildWhatsAppUrl(partner, product.name, branchName || undefined, activeWhatsApp)} target="_blank" rel="noopener noreferrer" 
+                  <a href={buildWhatsAppUrl(partner, product.name, branchName || undefined, activeWhatsApp)} target="_blank" rel="noopener noreferrer"
                     onClick={e => {
                       e.stopPropagation();
                       trackEvent('Contact', { contentName: product.name, contentId: product.id })
@@ -334,6 +351,24 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           )
         })}
       </div>
+
+      {/* ── LOAD MORE ── */}
+      {visibleCount < filtered.length && (
+        <div style={{ textAlign: "center", padding: "0 2rem 3rem" }}>
+          <button
+            onClick={() => setVisibleCount(v => v + PAGE_SIZE)}
+            style={{
+              padding: "14px 40px", borderRadius: 50, border: "2px solid var(--color-primary)",
+              background: "#fff", color: "var(--color-primary)", fontSize: 14, fontWeight: 700,
+              cursor: "pointer", transition: "all 0.2s"
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "var(--color-primary)"; (e.currentTarget as HTMLButtonElement).style.color = "#fff" }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "#fff"; (e.currentTarget as HTMLButtonElement).style.color = "var(--color-primary)" }}
+          >
+            Ver más ({filtered.length - visibleCount} restantes)
+          </button>
+        </div>
+      )}
 
       {/* ── FOOTER ── */}
       <div style={{ background: 'var(--color-primary)', color: 'var(--text-on-primary)', textAlign: "center", padding: "1.5rem", fontSize: 12, marginTop: "2rem", opacity: 0.8 }}>

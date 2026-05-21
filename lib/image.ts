@@ -1,3 +1,36 @@
+const SUPABASE_URL = 'https://qsicmaprkrqpotrlcrmq.supabase.co'
+
+/**
+ * Converts a Supabase Storage public URL to a Supabase Image Transform URL.
+ * Uses the /render/image/public/ endpoint to serve WebP at reduced resolution.
+ *
+ * Original:  https://...supabase.co/storage/v1/object/public/bucket/path.png
+ * Optimized: https://...supabase.co/storage/v1/render/image/public/bucket/path.png?width=W&quality=Q&format=webp
+ *
+ * Falls back to the original URL for external images or non-Supabase URLs.
+ */
+export function getOptimizedImageUrl(
+  url: string | null | undefined,
+  width: number = 480,
+  quality: number = 75
+): string {
+  if (!url) return '/placeholder.png'
+  if (!url.startsWith(SUPABASE_URL)) return url
+
+  // Replace /object/public/ with /render/image/public/
+  const transformed = url.replace(
+    `${SUPABASE_URL}/storage/v1/object/public/`,
+    `${SUPABASE_URL}/storage/v1/render/image/public/`
+  )
+
+  // If the replacement didn't happen (URL structure is different), return original
+  if (transformed === url) return url
+
+  // Append transform params
+  const separator = transformed.includes('?') ? '&' : '?'
+  return `${transformed}${separator}width=${width}&quality=${quality}&format=webp`
+}
+
 /**
  * Compresses an image file using Canvas.
  * @param file The original image file
