@@ -26,9 +26,13 @@ export function getOptimizedImageUrl(
   // If the replacement didn't happen (URL structure is different), return original
   if (transformed === url) return url
 
-  // Append transform params
+  // Append transform params.
+  // Se pide un cuadro width × width con resize=contain: Supabase devuelve la
+  // imagen COMPLETA dentro del cuadro. Solo con `width`, el render usaba el
+  // modo por defecto (cover) y recortaba los lados: las fotos 1:1 llegaban
+  // como tiras verticales y los juegos anchos se veían cortados.
   const separator = transformed.includes('?') ? '&' : '?'
-  return `${transformed}${separator}width=${width}&quality=${quality}&format=webp`
+  return `${transformed}${separator}width=${width}&height=${width}&resize=contain&quality=${quality}&format=webp`
 }
 
 /**

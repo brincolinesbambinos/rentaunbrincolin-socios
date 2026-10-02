@@ -30,12 +30,17 @@ export default async function ProductPage({
   searchParams
 }: { 
   params: Promise<{ partner: string, branch: string, slug: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string; fecha?: string }>
 }) {
   const { partner: partnerSlug, branch: branchSlug, slug } = await params
-  const { active_whatsapp_slug, sp } = await searchParams
+  const { active_whatsapp_slug, sp, fecha } = await searchParams
   const hidePrice = sp === '1'
-  const wlSuffix = hidePrice ? '?sp=1' : ''
+  // Fecha del evento que venía del catálogo (se conserva al ir y volver)
+  const eventDate = fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? fecha : null
+  const qs = new URLSearchParams()
+  if (hidePrice) qs.set('sp', '1')
+  if (eventDate) qs.set('fecha', eventDate)
+  const query = qs.toString() ? `?${qs.toString()}` : ''
 
   const partner = await getPartnerBySlug(partnerSlug)
   if (!partner) notFound()
@@ -72,9 +77,9 @@ export default async function ProductPage({
   const activeSlug = active_whatsapp_slug || partnerSlug
   const activeWhatsApp = partner.links?.find(l => l.slug.toLowerCase() === activeSlug.toLowerCase())?.whatsapp || partner.whatsapp
 
-  const backUrl = active_whatsapp_slug && active_whatsapp_slug.toLowerCase() !== partnerSlug.toLowerCase()
-    ? `/${partnerSlug}/${active_whatsapp_slug}/${branchSlug}/catalogo${wlSuffix}`
-    : `/${partnerSlug}/${branchSlug}/catalogo${wlSuffix}`
+  const catalogPath = active_whatsapp_slug && active_whatsapp_slug.toLowerCase() !== partnerSlug.toLowerCase()
+    ? `/${partnerSlug}/${active_whatsapp_slug}/${branchSlug}/catalogo`
+    : `/${partnerSlug}/${branchSlug}/catalogo`
 
   return (
     <>
@@ -87,9 +92,12 @@ export default async function ProductPage({
         partner={partner}
         similar={similar}
         branchName={activeBranch.name}
-        backUrl={backUrl}
+        catalogPath={catalogPath}
+        query={query}
         activeWhatsApp={activeWhatsApp}
         hidePrice={hidePrice}
+        branchId={activeBranch.id}
+        eventDate={eventDate}
       />
     </>
   )

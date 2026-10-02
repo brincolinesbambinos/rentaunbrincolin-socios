@@ -1,0 +1,6 @@
+{
+  "puerto": 4444,
+  "comandoRun": "npm run dev",
+  "cwdRun": ".",
+  "carpetasSql": ["sql", "migrations", "db", "database", "supabase/migrations"]
+}

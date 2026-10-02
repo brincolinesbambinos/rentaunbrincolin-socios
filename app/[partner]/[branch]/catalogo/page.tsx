@@ -50,10 +50,10 @@ export default async function CatalogoPage({
   searchParams
 }: { 
   params: Promise<{ partner: string, branch: string }>,
-  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string }>
+  searchParams: Promise<{ active_whatsapp_slug?: string; sp?: string; fecha?: string }>
 }) {
   const { partner: partnerSlug, branch: branchSlug } = await params
-  const { active_whatsapp_slug, sp } = await searchParams
+  const { active_whatsapp_slug, sp, fecha } = await searchParams
   const hidePrice = sp === '1'
   const partner = await getPartnerBySlug(partnerSlug)
   
@@ -79,6 +79,8 @@ export default async function CatalogoPage({
       pixelId={pixelId}
       branchName={activeBranch.name}
       branchSlug={activeBranch.slug}
+      branchId={activeBranch.id}
+      initialDate={fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha) ? fecha : null}
       activeSlug={active_whatsapp_slug || partnerSlug}
       hidePrice={hidePrice}
     />
