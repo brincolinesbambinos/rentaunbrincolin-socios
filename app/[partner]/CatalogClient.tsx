@@ -452,8 +452,17 @@ export default function CatalogClient({ partner, products, featured = [], pixelI
           )}
         </div>
 
-        <div style={{ textAlign: "center", padding: "32px 16px 8px", fontSize: 12, color: MUTED }}>
-          Catálogo con tecnología de <strong style={{ color: INK }}>Brincolines Bambinos</strong>
+        <div style={{ textAlign: "center", padding: "32px 16px 8px", fontSize: 12, color: MUTED, lineHeight: 1.7 }}>
+          <div>Catálogo con tecnología de <strong style={{ color: INK }}>Brincolines Bambinos</strong></div>
+          <div>
+            Desarrollado por{" "}
+            <a href="https://www.bipbopdev.com/" target="_blank" rel="noopener noreferrer" style={{ color: INK, fontWeight: 800 }}>Bip Bop Dev</a>
+            {" · "}
+            <a href={`https://wa.me/523319664409?text=${encodeURIComponent("¡Hola Bip Bop Dev! Vi el catálogo y me interesa un proyecto.")}`}
+              target="_blank" rel="noopener noreferrer" style={{ color: INK, fontWeight: 700 }}>
+              ¿Quieres algo así? Escríbenos por WhatsApp
+            </a>
+          </div>
         </div>
       </main>
     </div>
