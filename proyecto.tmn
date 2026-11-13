@@ -1,0 +1,23 @@
+{
+  "timon": 1,
+  "nombre": "Renta un Brincolín · Socios",
+  "codigo": "RBS",
+  "cliente": "Brincolines Bambinos",
+  "marca": "Midnite Atelier",
+  "estado": "activo",
+  "color": "",
+  "descripcion": "",
+  "lanzadores": [
+    {
+      "nombre": "Desarrollo",
+      "comando": "npm run dev -- -p 4003",
+      "carpeta": ".",
+      "url": "http://localhost:4003"
+    }
+  ],
+  "ligas": [],
+  "relacionados": [
+    "RB"
+  ],
+  "timonVersion": "2026.11.09"
+}

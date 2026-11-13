@@ -1,0 +1,858 @@
+#!/usr/bin/env node
+/**
+ * Panel Timón v2 — tablero local, uno o varios proyectos.
+ * Un solo archivo, cero dependencias. Requiere Node 18+.
+ *
+ * Dos modos, se detecta solo:
+ *   • MULTI — si lo abres en una carpeta que CONTIENE proyectos (ej. /Plataformas/):
+ *     descubre todos los proyectos Timón adentro y los controla desde un mismo panel.
+ *   • SENCILLO — si lo abres dentro de un proyecto: solo ese, como siempre.
+ *
+ * Arranque:  node timon-panel.mjs [carpeta]   (o doble clic en Panel-Timon.command)
+ * Se abre en http://localhost:4444
+ *
+ * Los .md de cada proyecto siguen siendo la fuente de verdad — el panel solo los lee
+ * y escribe. Solo escucha en 127.0.0.1.
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULTS = {
+  puerto: 4444,
+  comandoRun: 'npm run dev',
+  cwdRun: '.',
+  carpetasSql: ['sql', 'migrations', 'db', 'database', 'supabase/migrations'],
+};
+const IGNORAR = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.venv', 'vendor', 'Library', '.cache', 'coverage', '.turbo', 'panel']);
+
+// ---------- detección de proyectos ----------
+const leer = f => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+function esProyecto(d) {
+  try {
+    const f = fs.readdirSync(d);
+    return f.includes('00-MARCO.md') || f.includes('CLAUDE.md')
+      || f.some(x => /^CHANGELOG-.+\.md$/i.test(x)) || f.some(x => /^INBOX-.+\.md$/i.test(x));
+  } catch { return false; }
+}
+function buscarProyectos(padre, prof = 0, out = []) {
+  if (prof > 3) return out;
+  let entradas; try { entradas = fs.readdirSync(padre, { withFileTypes: true }); } catch { return out; }
+  for (const e of entradas) {
+    if (!e.isDirectory() || e.name.startsWith('.') || IGNORAR.has(e.name)) continue;
+    const d = path.join(padre, e.name);
+    if (esProyecto(d)) out.push(d); else buscarProyectos(d, prof + 1, out);
+  }
+  return out;
+}
+function cargarConfig(dir) {
+  try { return { ...DEFAULTS, ...JSON.parse(leer(path.join(dir, 'timon.config.json')) || '{}') }; }
+  catch { return { ...DEFAULTS }; }
+}
+
+// dónde buscar: argumento, o la carpeta del script / su padre
+const argRuta = process.argv.slice(2).find(a => !a.startsWith('-'));
+let BASE = argRuta ? path.resolve(argRuta.replace(/^~/, os.homedir())) : SCRIPT_DIR;
+if (!argRuta && !esProyecto(BASE) && esProyecto(path.dirname(BASE))) BASE = path.dirname(BASE);
+const CONFIG_FILE = path.join(BASE, 'timon.config.json');
+let CONFIG_BASE = cargarConfig(BASE);
+const abs = r => path.resolve(BASE, String(r).replace(/^~/, os.homedir()));
+function guardarConfigBase() {
+  const { comandoRun, cwdRun, carpetasSql, ...propio } = CONFIG_BASE; // no persistir los defaults heredados
+  const guardar = { puerto: CONFIG_BASE.puerto, ...propio };
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(guardar, null, 2));
+  CONFIG_BASE = cargarConfig(BASE);
+}
+
+// ---------- dónde vive Timón (la plantilla + el actualizador) ----------
+function detectarTimon() {
+  if (CONFIG_BASE.rutaTimon) { const r = abs(CONFIG_BASE.rutaTimon); if (esTimonValido(r)) return r; }
+  const candidatos = [
+    path.join(BASE, 'sistema-timon'), path.join(path.dirname(BASE), 'sistema-timon'),
+    path.join(os.homedir(), 'Downloads', 'sistema-timon'), path.join(os.homedir(), 'sistema-timon'),
+    path.join(BASE, 'timon'), path.join(path.dirname(BASE), 'timon'),
+  ];
+  return candidatos.find(esTimonValido) || null;
+}
+const esTimonValido = d => { try { return fs.existsSync(path.join(d, 'plantilla-proyecto-nuevo')); } catch { return false; } };
+let RUTA_TIMON = detectarTimon();
+const plantillaDir = () => RUTA_TIMON ? path.join(RUTA_TIMON, 'plantilla-proyecto-nuevo') : null;
+
+let PROYECTOS = [];
+function descubrir() {
+  CONFIG_BASE = cargarConfig(BASE);
+  const rutas = [];
+  const registrados = Array.isArray(CONFIG_BASE.proyectos) ? CONFIG_BASE.proyectos : [];
+  const quitados = new Set((Array.isArray(CONFIG_BASE.ocultos) ? CONFIG_BASE.ocultos : []).map(abs));
+
+  if (Array.isArray(CONFIG_BASE.carpetasProyectos) && CONFIG_BASE.carpetasProyectos.length) {
+    for (const r of CONFIG_BASE.carpetasProyectos) {
+      const d = abs(r);
+      if (esProyecto(d)) rutas.push(d); else rutas.push(...buscarProyectos(d));
+    }
+  } else if (esProyecto(BASE)) rutas.push(BASE);
+  else {
+    rutas.push(...buscarProyectos(BASE));
+    if (!rutas.length && esProyecto(path.dirname(BASE))) rutas.push(path.dirname(BASE));
+  }
+  for (const r of registrados) { const d = abs(r); if (fs.existsSync(d)) rutas.push(d); }
+  for (let i = rutas.length - 1; i >= 0; i--) if (quitados.has(rutas[i])) rutas.splice(i, 1);
+  PROYECTOS = [...new Set(rutas)].map(ruta => {
+    const cfg = cargarConfig(ruta);
+    const cl = archivoRaiz(ruta, /^CHANGELOG-[^.]+\.md$/i);
+    const m = cl && path.basename(cl).match(/^CHANGELOG-(.+)\.md$/i);
+    return { id: Buffer.from(ruta).toString('base64url').slice(-24), ruta, cfg, nombre: path.basename(ruta), codigo: cfg.codigo || (m ? m[1] : path.basename(ruta).slice(0, 6).toUpperCase()) };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+function archivoRaiz(raiz, re) {
+  try { const f = fs.readdirSync(raiz).find(f => re.test(f) && !/archivo/i.test(f)); return f ? path.join(raiz, f) : null; } catch { return null; }
+}
+const proyPorId = id => PROYECTOS.find(p => p.id === id) || PROYECTOS[0];
+
+// ---------- rutas seguras ----------
+const dentro = (raiz, p) => { const r = path.resolve(raiz, p); return r === raiz || r.startsWith(raiz + path.sep) ? r : null; };
+const changelogDe = p => archivoRaiz(p.ruta, /^CHANGELOG-[^.]+\.md$/i);
+const inboxDe = p => archivoRaiz(p.ruta, /^INBOX-[^.]+\.md$/i);
+
+// ---------- changelog ----------
+function parseChangelog(p) {
+  const file = changelogDe(p);
+  if (!file) return { file: null, headers: [], rows: [], lines: [] };
+  const lines = (leer(file) || '').split('\n');
+  let headers = [], rows = [], headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l.startsWith('|')) continue;
+    const cells = l.split('|').slice(1, -1).map(c => c.trim());
+    if (headerIdx === -1) { headers = cells; headerIdx = i; continue; }
+    if (/^[-:\s|]+$/.test(l)) continue;
+    if (cells.length && cells.some(c => c !== '')) rows.push({ i, cells });
+  }
+  return { file, headers, rows, lines };
+}
+const colIndex = (h, n, fb) => { const i = h.findIndex(x => x.toLowerCase().includes(n)); return i >= 0 ? i : fb; };
+function actualizarEstado(p, id, estado, nota) {
+  const cl = parseChangelog(p);
+  if (!cl.file) throw new Error('Este proyecto no tiene changelog');
+  const row = cl.rows.find(r => r.cells[0] === id);
+  if (!row) throw new Error(`No encontré la fila ${id}`);
+  row.cells[colIndex(cl.headers, 'estado', 5)] = estado;
+  if (nota) row.cells[colIndex(cl.headers, 'verificaci', 7)] = nota;
+  cl.lines[row.i] = '| ' + row.cells.join(' | ') + ' |';
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+  return row.cells;
+}
+function agregarFila(p, { modulo = '', quien = '', descripcion, herramienta = '' }) {
+  const cl = parseChangelog(p);
+  if (!cl.file) throw new Error('Este proyecto no tiene changelog');
+  let max = 0;
+  for (const r of cl.rows) { const m = r.cells[0].match(/-(\d+)\s*$/); if (m) max = Math.max(max, +m[1]); }
+  const id = `${p.codigo}-${String(max + 1).padStart(3, '0')}`;
+  const fila = `| ${id} | ${new Date().toISOString().slice(0, 10)} | ${modulo} | ${quien} | ${descripcion} | 🔲 Pendiente | ${herramienta} | — |`;
+  let after = -1;
+  for (let i = 0; i < cl.lines.length; i++) if (cl.lines[i].trim().startsWith('|')) after = i;
+  if (after === -1) throw new Error('El changelog no tiene tabla');
+  cl.lines.splice(after + 1, 0, fila);
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+  return id;
+}
+function capturarInbox(p, texto) {
+  let file = inboxDe(p);
+  if (!file) { file = path.join(p.ruta, `INBOX-${p.codigo}.md`); fs.writeFileSync(file, `# INBOX — ${p.codigo}\n\nCaptura sin procesar.\n\n---\n`); }
+  fs.appendFileSync(file, `\n## ${new Date().toISOString().slice(0, 10)} — Captura rápida (Panel)\n\n${texto.trim()}\n\n_Sin procesar._\n`);
+}
+
+// ---------- specs / docs / sql ----------
+function listaSpecs(p) {
+  const dir = path.join(p.ruta, 'specs'); const out = [];
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.md') || f.toLowerCase() === 'readme.md') continue;
+      const full = path.join(dir, f); if (!fs.statSync(full).isFile()) continue;
+      const m = (leer(full) || '').match(/##\s*Estado\s*\r?\n+\s*([^\n]+)/i);
+      out.push({ file: 'specs/' + f, nombre: f.replace(/\.md$/, ''), estado: m ? m[1].trim() : '—', mtime: fs.statSync(full).mtimeMs });
+    }
+  } catch { }
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+const PLANTILLA_SPEC = n => `# Spec: ${n}
+
+## Objetivo
+[1-2 líneas: qué problema resuelve]
+
+## Alcance
+- Incluye: ...
+- No incluye (fuera de alcance): ...
+
+## Contexto / arquitectura relevante
+[tablas, módulos, o flujos que toca]
+
+## Criterios de aceptación (verificables sin leer código — máximo 7)
+- [ ] Cuando hago X, veo Y
+- [ ] ...
+
+## Restricciones
+[stack, convenciones, límites conocidos]
+
+## Estado
+Abierto
+`;
+function listaDocs(p) {
+  const out = [];
+  try { for (const f of fs.readdirSync(p.ruta)) if (f.endsWith('.md') && fs.statSync(path.join(p.ruta, f)).isFile()) out.push(f); } catch { }
+  const orden = ['00-MARCO.md', '01-ARQUITECTURA.md'];
+  return out.sort((a, b) => ((orden.indexOf(a) + 1 || 99) - (orden.indexOf(b) + 1 || 99)) || a.localeCompare(b));
+}
+const LEDGER = path.join(SCRIPT_DIR, 'sql-aplicados.json');
+const leerLedger = () => { try { return JSON.parse(fs.readFileSync(LEDGER, 'utf8')); } catch { return {}; } };
+function listaSql(p) {
+  const out = [], ledger = leerLedger()[p.ruta] || {};
+  const walk = (dir, rel, d) => {
+    if (d > 4) return;
+    let es; try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      const full = path.join(dir, e.name), r = (rel + '/' + e.name).replace(/^\//, '');
+      if (e.isDirectory()) walk(full, r, d + 1);
+      else if (e.name.endsWith('.sql')) out.push({ rel: r, mtime: fs.statSync(full).mtimeMs, aplicado: ledger[r] || null });
+    }
+  };
+  for (const c of (p.cfg.carpetasSql || DEFAULTS.carpetasSql)) walk(path.join(p.ruta, c), c, 0);
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+
+// ---------- correr proyectos (uno por proyecto, simultáneos) ----------
+const corriendo = new Map(); // id -> {proc, buf, seq, exit}
+function estadoRun(id) { const r = corriendo.get(id); return { corriendo: !!(r && r.proc), exit: r ? r.exit : null }; }
+// Los chunks pueden partir una línea a la mitad: se guarda el resto hasta que llegue su \n.
+function pushLog(r, chunk, { fin = false } = {}) {
+  const partes = ((r.resto || '') + chunk.toString().replace(/\x1b\[[0-9;]*m/g, '')).split('\n');
+  r.resto = fin ? '' : partes.pop();
+  if (fin && partes.length && partes[partes.length - 1] === '') partes.pop();
+  for (const line of partes) {
+    if (line.trim() === '' && r.buf.length && r.buf[r.buf.length - 1].t.trim() === '') continue;
+    r.buf.push({ i: r.seq++, t: line });
+  }
+  if (fin && r.resto) { r.buf.push({ i: r.seq++, t: r.resto }); r.resto = ''; }
+  if (r.buf.length > 1200) r.buf = r.buf.slice(-1000);
+}
+function runStart(p) {
+  const prev = corriendo.get(p.id);
+  if (prev && prev.proc) return { ok: false, error: 'Ese proyecto ya está corriendo' };
+  p.cfg = cargarConfig(p.ruta); // relee el config por si lo editaste con el panel abierto
+  const r = { proc: null, buf: [], seq: 0, exit: null, resto: '' };
+  corriendo.set(p.id, r);
+  const cmd = p.cfg.comandoRun || DEFAULTS.comandoRun;
+  pushLog(r, `$ ${cmd}\n`);
+  r.proc = spawn(cmd, {
+    cwd: path.resolve(p.ruta, p.cfg.cwdRun || '.'), shell: true,
+    detached: process.platform !== 'win32', env: { ...process.env, FORCE_COLOR: '0' },
+  });
+  r.proc.stdout.on('data', c => pushLog(r, c));
+  r.proc.stderr.on('data', c => pushLog(r, c));
+  r.proc.on('exit', (code, sig) => { r.exit = { code, sig }; pushLog(r, `\n[proceso terminó — código ${code ?? sig}]\n`, { fin: true }); r.proc = null; });
+  r.proc.on('error', e => { pushLog(r, `\n[error al arrancar: ${e.message}]\n`); r.proc = null; });
+  return { ok: true };
+}
+function runStop(p) {
+  const r = corriendo.get(p.id);
+  if (!r || !r.proc) return { ok: false, error: 'No está corriendo' };
+  const pr = r.proc;
+  try { process.kill(-pr.pid, 'SIGTERM'); } catch { try { pr.kill('SIGTERM'); } catch { } }
+  setTimeout(() => { if (!r.proc) return; try { process.kill(-pr.pid, 'SIGKILL'); } catch { try { pr.kill('SIGKILL'); } catch { } } }, 3500);
+  return { ok: true };
+}
+
+// ---------- resúmenes ----------
+function alertasDe(p) {
+  const cl = parseChangelog(p);
+  const i = colIndex(cl.headers, 'estado', 5);
+  const cuenta = s => cl.rows.filter(r => (r.cells[i] || '').includes(s)).length;
+  const inbox = inboxDe(p), cont = inbox ? leer(inbox) : null;
+  return {
+    pendientes: cuenta('🔲'), enConstruccion: cuenta('🔄'), construidosSinVerificar: cuenta('✅'),
+    verificados: cuenta('✔️'), descartados: cuenta('🚫'),
+    inboxSinProcesar: cont ? (cont.match(/_?Sin procesar\.?_?/gi) || []).length : 0,
+    specsAbiertos: listaSpecs(p).filter(s => !/cerrado/i.test(s.estado)).length,
+    sqlPendientes: listaSql(p).filter(s => !s.aplicado).length,
+  };
+}
+const resumenGeneral = () => PROYECTOS.map(p => ({
+  id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta,
+  alertas: alertasDe(p), corriendo: estadoRun(p.id).corriendo, tieneChangelog: !!changelogDe(p),
+}));
+function estadoProyecto(p) {
+  const cl = parseChangelog(p);
+  const inbox = inboxDe(p);
+  return {
+    proyecto: { id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta },
+    changelog: cl.file ? { file: path.basename(cl.file), headers: cl.headers, rows: cl.rows.map(r => r.cells), iEstado: colIndex(cl.headers, 'estado', 5) } : null,
+    inbox: inbox ? { file: path.basename(inbox), contenido: leer(inbox) } : null,
+    specs: listaSpecs(p), docs: listaDocs(p), sql: listaSql(p),
+    run: { ...estadoRun(p.id), comando: p.cfg.comandoRun || DEFAULTS.comandoRun },
+    alertas: alertasDe(p),
+  };
+}
+
+// ---------- gestión de proyectos ----------
+function agregarProyecto(ruta) {
+  const d = abs(ruta);
+  if (!fs.existsSync(d)) throw new Error('Esa carpeta no existe');
+  if (!fs.statSync(d).isDirectory()) throw new Error('Eso no es una carpeta');
+  if (!esProyecto(d)) throw new Error('Esa carpeta no es un proyecto Timón todavía — usa "Incorporar a Timón"');
+  const lista = new Set((CONFIG_BASE.proyectos || []).map(abs));
+  lista.add(d);
+  CONFIG_BASE.proyectos = [...lista];
+  CONFIG_BASE.ocultos = (CONFIG_BASE.ocultos || []).map(abs).filter(x => x !== d);
+  guardarConfigBase(); descubrir();
+  return d;
+}
+function quitarProyecto(ruta) {
+  const d = abs(ruta);
+  CONFIG_BASE.proyectos = (CONFIG_BASE.proyectos || []).map(abs).filter(x => x !== d);
+  const oc = new Set((CONFIG_BASE.ocultos || []).map(abs));
+  oc.add(d); // por si lo encuentra la búsqueda automática
+  CONFIG_BASE.ocultos = [...oc];
+  guardarConfigBase(); descubrir();
+}
+function incorporarProyecto(ruta, codigo) {
+  const plantilla = plantillaDir();
+  if (!plantilla) throw new Error('No sé dónde está Timón — configúralo primero en la pestaña Timón');
+  const d = abs(ruta);
+  const cod = String(codigo || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!cod) throw new Error('Falta el código del proyecto (3-5 letras, ej. RB, IDEA)');
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  if (!fs.statSync(d).isDirectory()) throw new Error('Eso no es una carpeta');
+  if (esProyecto(d)) throw new Error('Esa carpeta ya es un proyecto Timón — usa "Agregar existente"');
+
+  const copiados = [];
+  const copiar = (origen, destino) => {
+    for (const e of fs.readdirSync(origen, { withFileTypes: true })) {
+      if (e.name === 'panel' || e.name === '.DS_Store') continue;       // el panel es central
+      const o = path.join(origen, e.name);
+      let nombre = e.name.replace(/\[CODIGO\]/g, cod);
+      const dst = path.join(destino, nombre);
+      if (e.isDirectory()) { fs.mkdirSync(dst, { recursive: true }); copiar(o, dst); continue; }
+      if (fs.existsSync(dst)) continue;                                  // nunca pisa lo que ya existe
+      let contenido = leer(o);
+      if (contenido !== null && /\.(md|json)$/i.test(nombre)) contenido = contenido.replace(/\[CODIGO\]/g, cod);
+      fs.writeFileSync(dst, contenido ?? fs.readFileSync(o));
+      copiados.push(path.relative(d, dst));
+    }
+  };
+  copiar(plantilla, d);
+  agregarProyecto(d);
+  return { ruta: d, codigo: cod, archivos: copiados.length };
+}
+
+// ---------- correr el actualizador de Timón ----------
+let act = { corriendo: false, buf: [], seq: 0, fin: null };
+function actualizarTimon(rutas, dry) {
+  if (act.corriendo) return { ok: false, error: 'Ya hay una actualización en curso' };
+  if (!RUTA_TIMON) return { ok: false, error: 'No sé dónde está Timón — configúralo en la pestaña Timón' };
+  const script = path.join(RUTA_TIMON, 'actualizar-timon.mjs');
+  if (!fs.existsSync(script)) return { ok: false, error: `No encontré actualizar-timon.mjs en ${RUTA_TIMON}` };
+  if (!rutas.length) return { ok: false, error: 'No hay proyectos que actualizar' };
+
+  act = { corriendo: true, buf: [], seq: 0, fin: null, resto: '' };
+  const args = [script, ...(dry ? ['--dry'] : []), ...rutas];
+  const push = (ch, o) => pushLog(act, ch, o);
+  push(`$ node actualizar-timon.mjs ${dry ? '--dry ' : ''}${rutas.length} proyecto(s)\n`);
+  const pr = spawn(process.execPath, args, { cwd: RUTA_TIMON });
+  pr.stdout.on('data', push); pr.stderr.on('data', push);
+  pr.on('exit', code => { act.corriendo = false; act.fin = { code, dry }; push(`\n[terminó — código ${code}]\n`, { fin: true }); descubrir(); });
+  pr.on('error', e => { act.corriendo = false; act.fin = { code: -1 }; push(`\n[error: ${e.message}]\n`, { fin: true }); });
+  return { ok: true };
+}
+
+// ---------- explorador de carpetas (para elegir sin escribir rutas) ----------
+function explorar(dir) {
+  const d = dir ? abs(dir) : os.homedir();
+  if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) throw new Error('No existe esa carpeta');
+  const carpetas = [];
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.startsWith('.') || IGNORAR.has(e.name)) continue;
+    const full = path.join(d, e.name);
+    carpetas.push({ nombre: e.name, ruta: full, esProyecto: esProyecto(full) });
+  }
+  carpetas.sort((a, b) => a.nombre.localeCompare(b.nombre));
+  return { dir: d, padre: path.dirname(d) === d ? null : path.dirname(d), esProyecto: esProyecto(d), carpetas };
+}
+
+// ---------- HTTP ----------
+const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+const body = req => new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } }); });
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://x');
+  const q = url.pathname;
+  const p = () => { const pr = proyPorId(url.searchParams.get('p')); if (!pr) throw new Error('No hay proyectos detectados'); return pr; };
+  try {
+    if (req.method === 'GET' && q === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(HTML); }
+    if (req.method === 'GET' && q === '/api/proyectos') { descubrir(); return json(res, 200, { base: BASE, multi: PROYECTOS.length > 1, proyectos: resumenGeneral() }); }
+    if (req.method === 'GET' && q === '/api/estado') return json(res, 200, estadoProyecto(p()));
+    if (req.method === 'GET' && q === '/api/archivo') {
+      const f = url.searchParams.get('f') || '';
+      if (!/\.(md|sql)$/i.test(f)) return json(res, 400, { error: 'Solo .md y .sql' });
+      const full = dentro(p().ruta, f);
+      if (!full) return json(res, 400, { error: 'Ruta fuera del proyecto' });
+      const c = leer(full);
+      return c === null ? json(res, 404, { error: 'No existe' }) : json(res, 200, { contenido: c });
+    }
+    if (req.method === 'POST' && q === '/api/inbox') { const b = await body(req); if (!b.texto?.trim()) return json(res, 400, { error: 'Texto vacío' }); capturarInbox(p(), b.texto); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/changelog/estado') { const b = await body(req); return json(res, 200, { ok: true, cells: actualizarEstado(p(), b.id, b.estado, b.nota) }); }
+    if (req.method === 'POST' && q === '/api/changelog/nueva') { const b = await body(req); if (!b.descripcion?.trim()) return json(res, 400, { error: 'Falta descripción' }); return json(res, 200, { ok: true, id: agregarFila(p(), b) }); }
+    if (req.method === 'PUT' && q === '/api/spec') {
+      const b = await body(req), pr = p();
+      const full = dentro(pr.ruta, b.file || '');
+      if (!full || !full.startsWith(path.join(pr.ruta, 'specs') + path.sep) || !full.endsWith('.md')) return json(res, 400, { error: 'Solo archivos dentro de /specs/' });
+      fs.writeFileSync(full, b.contenido ?? ''); return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && q === '/api/spec/nuevo') {
+      const b = await body(req), pr = p();
+      const slug = (b.nombre || '').trim().toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi, '-').replace(/^-+|-+$/g, '');
+      if (!slug) return json(res, 400, { error: 'Falta nombre' });
+      fs.mkdirSync(path.join(pr.ruta, 'specs'), { recursive: true });
+      const file = path.join(pr.ruta, 'specs', `${pr.codigo}-${slug}.md`);
+      if (fs.existsSync(file)) return json(res, 400, { error: 'Ya existe un spec con ese nombre' });
+      fs.writeFileSync(file, PLANTILLA_SPEC(b.nombre.trim()));
+      return json(res, 200, { ok: true, file: 'specs/' + path.basename(file) });
+    }
+    if (req.method === 'POST' && q === '/api/sql/aplicado') {
+      const b = await body(req), pr = p(), l = leerLedger();
+      l[pr.ruta] = l[pr.ruta] || {};
+      if (b.aplicado) l[pr.ruta][b.rel] = new Date().toISOString().slice(0, 10); else delete l[pr.ruta][b.rel];
+      fs.writeFileSync(LEDGER, JSON.stringify(l, null, 2));
+      return json(res, 200, { ok: true });
+    }
+    // --- gestión de Timón y proyectos ---
+    if (req.method === 'GET' && q === '/api/timon') {
+      return json(res, 200, {
+        base: BASE, rutaTimon: RUTA_TIMON, valida: !!(RUTA_TIMON && esTimonValido(RUTA_TIMON)),
+        tieneActualizador: !!(RUTA_TIMON && fs.existsSync(path.join(RUTA_TIMON, 'actualizar-timon.mjs'))),
+        registrados: (CONFIG_BASE.proyectos || []).map(abs),
+        proyectos: PROYECTOS.map(p => ({ id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta })),
+        actualizando: act.corriendo,
+      });
+    }
+    if (req.method === 'POST' && q === '/api/timon/ruta') {
+      const b = await body(req); const d = abs(b.ruta || '');
+      if (!esTimonValido(d)) return json(res, 400, { error: 'Ahí no encuentro plantilla-proyecto-nuevo' });
+      RUTA_TIMON = d; CONFIG_BASE.rutaTimon = d; guardarConfigBase();
+      return json(res, 200, { ok: true, rutaTimon: d });
+    }
+    if (req.method === 'POST' && q === '/api/proyectos/agregar') { const b = await body(req); return json(res, 200, { ok: true, ruta: agregarProyecto(b.ruta) }); }
+    if (req.method === 'POST' && q === '/api/proyectos/quitar') { const b = await body(req); quitarProyecto(b.ruta); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/proyectos/incorporar') { const b = await body(req); return json(res, 200, { ok: true, ...incorporarProyecto(b.ruta, b.codigo) }); }
+    if (req.method === 'POST' && q === '/api/timon/actualizar') {
+      const b = await body(req);
+      const rutas = b.todos ? PROYECTOS.map(x => x.ruta) : (b.ids || []).map(id => proyPorId(id)).filter(Boolean).map(x => x.ruta);
+      return json(res, 200, actualizarTimon(rutas, !!b.dry));
+    }
+    if (req.method === 'GET' && q === '/api/timon/logs') {
+      const since = +(url.searchParams.get('since') || 0);
+      return json(res, 200, { corriendo: act.corriendo, fin: act.fin, lines: act.buf.filter(l => l.i >= since), next: act.seq });
+    }
+    if (req.method === 'GET' && q === '/api/explorar') return json(res, 200, explorar(url.searchParams.get('dir')));
+
+    if (req.method === 'POST' && q === '/api/run/start') return json(res, 200, runStart(p()));
+    if (req.method === 'POST' && q === '/api/run/stop') return json(res, 200, runStop(p()));
+    if (req.method === 'GET' && q === '/api/run/logs') {
+      const pr = p(), r = corriendo.get(pr.id), since = +(url.searchParams.get('since') || 0);
+      if (!r) return json(res, 200, { corriendo: false, exit: null, lines: [], next: 0 });
+      return json(res, 200, { corriendo: !!r.proc, exit: r.exit, lines: r.buf.filter(l => l.i >= since), next: r.seq });
+    }
+    json(res, 404, { error: 'No existe ese endpoint' });
+  } catch (e) { json(res, 500, { error: e.message }); }
+});
+
+// ---------- UI ----------
+const HTML = `<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Panel Timón</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+:root{--bg1:#0e1420;--bg2:#131c2e;--panel:#1a2438;--panel2:#212e47;--line:#2e3f5e;--tx:#e8edf7;--tx2:#9fb0cc;--acc:#5eb7ff;--acc2:#8f7bff;--ok:#3ddc97;--warn:#ffb454;--gris:#7f8db0;--grad:linear-gradient(135deg,#5eb7ff,#8f7bff)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Space Grotesk',system-ui,sans-serif;background:linear-gradient(160deg,var(--bg1),var(--bg2) 60%,#1a1530);color:var(--tx);min-height:100vh}
+header{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(14,20,32,.93);backdrop-filter:blur(8px);z-index:5;flex-wrap:wrap}
+header h1{font-size:18px;font-weight:700;cursor:pointer}
+header h1 b{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.chip{font-size:12px;padding:3px 10px;border-radius:99px;border:1px solid var(--line);color:var(--tx2)}
+select.proy{font-family:inherit;font-size:13.5px;background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:9px;padding:6px 10px;max-width:280px}
+nav{display:flex;gap:6px;padding:12px 22px 0;flex-wrap:wrap}
+nav button{font-family:inherit;font-size:14px;font-weight:500;background:transparent;color:var(--tx2);border:1px solid transparent;padding:8px 15px;border-radius:10px;cursor:pointer}
+nav button:hover{color:var(--tx)} nav button.on{background:var(--panel);border-color:var(--line);color:var(--tx)}
+nav button .n{font-size:11px;margin-left:6px;padding:1px 7px;border-radius:99px;background:var(--panel2);color:var(--acc)}
+main{padding:18px 22px 60px;max-width:1240px;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.card .num{font-size:26px;font-weight:700}.card .lbl{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.card.alerta{border-color:var(--warn);background:linear-gradient(135deg,rgba(255,180,84,.12),var(--panel))}
+.card.bien{border-color:rgba(61,220,151,.5)}
+.seccion{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px}
+.seccion h2{font-size:15px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.seccion h2::before{content:'';width:9px;height:9px;border-radius:3px;background:var(--grad)}
+.grid-proy{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:14px}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;cursor:pointer;transition:border-color .15s,transform .15s}
+.pcard:hover{border-color:var(--acc);transform:translateY(-2px)}
+.pcard.alerta{border-color:var(--warn)}
+.pcard .nom{font-size:15.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+.pcard .cod{font-size:11.5px;color:var(--tx2);margin-top:2px;font-family:'JetBrains Mono',monospace}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.pill{font-size:12px;padding:3px 9px;border-radius:99px;background:var(--bg1);border:1px solid var(--line);color:var(--tx2)}
+.pill b{color:var(--tx);font-weight:700}
+.pill.w{border-color:var(--warn);color:var(--warn)}.pill.g{border-color:rgba(61,220,151,.5);color:var(--ok)}.pill.a{border-color:var(--acc);color:var(--acc)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th{color:var(--tx2);font-weight:500;text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid rgba(46,63,94,.5);vertical-align:top}
+tr:hover td{background:rgba(94,183,255,.05)}
+select,input[type=text],textarea{font-family:inherit;font-size:13.5px;background:var(--bg1);color:var(--tx);border:1px solid var(--line);border-radius:9px;padding:7px 10px}
+select:focus,input:focus,textarea:focus{outline:none;border-color:var(--acc)}
+textarea{width:100%;resize:vertical}
+.btn{font-family:inherit;font-size:13.5px;font-weight:500;border:none;border-radius:10px;padding:9px 16px;cursor:pointer;background:var(--grad);color:#0b1020}
+.btn.sec{background:var(--panel2);color:var(--tx);border:1px solid var(--line)}
+.btn.rojo{background:linear-gradient(135deg,#ff6f91,#ff9b54);color:#20090d}
+.btn:disabled{opacity:.45;cursor:default}
+.est{white-space:nowrap;font-size:12.5px;padding:2px 9px;border-radius:99px;border:1px solid var(--line)}
+.est-p{color:var(--tx2)}.est-c{color:var(--acc)}.est-b{color:var(--warn)}.est-v{color:var(--ok)}.est-d{color:var(--gris);text-decoration:line-through}
+.fila-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.fila-form input{flex:1;min-width:120px}
+.lista{display:flex;flex-direction:column;gap:8px}
+.item{display:flex;align-items:center;gap:10px;background:var(--bg1);border:1px solid var(--line);border-radius:12px;padding:11px 14px;cursor:pointer}
+.item:hover{border-color:var(--acc)}
+.item .meta{margin-left:auto;font-size:12px;color:var(--tx2);white-space:nowrap;display:flex;gap:10px;align-items:center}
+.md{line-height:1.65;font-size:14.5px;overflow-x:auto}
+.md h1,.md h2,.md h3{margin:16px 0 8px}.md h1{font-size:20px}.md h2{font-size:17px}.md h3{font-size:15px}
+.md p{margin:8px 0}.md ul,.md ol{margin:8px 0 8px 22px}
+.md code{font-family:'JetBrains Mono',monospace;font-size:12.5px;background:var(--bg1);padding:2px 6px;border-radius:6px}
+.md pre{background:var(--bg1);border:1px solid var(--line);border-radius:10px;padding:12px;overflow-x:auto;margin:10px 0}
+.md pre code{background:none;padding:0}.md hr{border:none;border-top:1px solid var(--line);margin:16px 0}
+.md blockquote{border-left:3px solid var(--acc2);padding-left:12px;color:var(--tx2);margin:8px 0}
+#logs{font-family:'JetBrains Mono',monospace;font-size:12px;background:#0a0f18;border:1px solid var(--line);border-radius:12px;padding:14px;height:420px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;line-height:1.5}
+#logsAct pre{background:#0a0f18;max-height:340px;overflow-y:auto;margin:0}
+#logsAct code{font-size:12px;line-height:1.55;white-space:pre-wrap}
+.editorArea{font-family:'JetBrains Mono',monospace;font-size:13px;min-height:420px;line-height:1.55}
+.dot{width:9px;height:9px;border-radius:99px;display:inline-block;background:var(--gris)}
+.dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--acc);border-radius:12px;padding:10px 18px;font-size:13.5px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20}
+.toast.show{opacity:1}
+.subtabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}.subtabs .btn{padding:6px 12px;font-size:12.5px}
+.volver{color:var(--acc);cursor:pointer;font-size:13px;margin-bottom:10px;display:inline-block}
+.aviso{font-size:12.5px;color:var(--tx2);margin-top:8px}
+@media(max-width:640px){main,header,nav{padding-left:12px;padding-right:12px}}
+</style></head>
+<body>
+<header>
+  <h1 onclick="irGeneral()">🧭 Panel <b>Timón</b></h1>
+  <select class="proy" id="selProy" onchange="elegirProyecto(this.value)"></select>
+  <span class="chip" style="margin-left:auto"><span class="dot" id="hDot"></span> <span id="hRun">detenido</span></span>
+</header>
+<nav id="nav"></nav>
+<main id="main">Cargando…</main>
+<div class="toast" id="toast"></div>
+<script>
+let PROY=[], MULTI=false, actual=null, S=null, tab='general';
+let specAbierto=null,sqlAbierto=null,logNext=0,logTimer=null;
+const $=s=>document.querySelector(s);
+const esc=s=>(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const ESTADOS=['🔲 Pendiente','🔄 En construcción','✅ Construido','✔️ Verificado','🚫 Descartado'];
+const claseEst=e=>e.includes('✔️')?'est-v':e.includes('✅')?'est-b':e.includes('🔄')?'est-c':e.includes('🚫')?'est-d':'est-p';
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+async function api(p,opt){const r=await fetch(p,opt);const j=await r.json();if(!r.ok||j.error){toast('⚠️ '+(j.error||r.status));throw new Error(j.error||r.status)}return j}
+const qp=()=>'?p='+encodeURIComponent(actual);
+
+async function inicio(){
+  const r=await api('/api/proyectos');PROY=r.proyectos;MULTI=r.multi;
+  $('#selProy').innerHTML='<option value="">— Vista general —</option>'+PROY.map(p=>'<option value="'+p.id+'">'+esc(p.nombre)+'</option>').join('');
+  if(!PROY.length){pintarNav();$('#main').innerHTML='<div class="seccion"><h2>Todavía no hay proyectos</h2>No encontré proyectos Timón bajo <code>'+esc(r.base)+'</code>.<div class="aviso">Busco carpetas con CLAUDE.md, 00-MARCO.md o CHANGELOG-*.md (hasta 3 niveles). Desde la pestaña <b>⚙ Timón</b> puedes agregar proyectos que estén en otro lado, o incorporar una carpeta nueva.</div><div class="fila-form"><button class="btn" onclick="irTimon()">⚙ Ir a Timón</button></div></div>';return}
+  if(!MULTI){actual=PROY[0].id;$('#selProy').value=actual;await entrar(actual,'tablero')}
+  else irGeneral();
+}
+function irGeneral(){actual=null;tab='general';$('#selProy').value='';$('#hDot').className='dot';$('#hRun').textContent='—';refrescarGeneral()}
+function irTimon(){actual=null;tab='timon';$('#selProy').value='';pintarNav();pintarTimon()}
+async function refrescarGeneral(){const r=await api('/api/proyectos');PROY=r.proyectos;pintarNav();pintarGeneral()}
+async function elegirProyecto(id){if(!id)return irGeneral();await entrar(id,'tablero')}
+async function entrar(id,t){actual=id;tab=t||'tablero';$('#selProy').value=id;S=await api('/api/estado'+qp());pintarNav();pintar()}
+async function recargar(){if(!actual)return refrescarGeneral();S=await api('/api/estado'+qp());pintarNav();pintar();cabecera()}
+function cabecera(){$('#hDot').className='dot'+(S.run.corriendo?' on':'');$('#hRun').textContent=S.run.corriendo?'corriendo':'detenido'}
+function pintarNav(){
+  const btnTimon='<button class="'+(tab==='timon'?'on':'')+'" onclick="irTimon()">⚙ Timón</button>';
+  if(!actual){$('#nav').innerHTML='<button class="'+(tab==='general'?'on':'')+'" onclick="irGeneral()">Vista general</button>'+btnTimon;return}
+  const t=[['tablero','Tablero'],['inbox','Inbox'],['specs','Specs',S?S.specs.length:0],['sql','SQL',S?S.sql.filter(s=>!s.aplicado).length:0],['docs','Docs'],['run','▶ Correr']];
+  $('#nav').innerHTML=(MULTI?'<button onclick="irGeneral()">← Todos</button>':'')+t.map(([id,l,n])=>'<button class="'+(tab===id?'on':'')+'" onclick="irA(\\''+id+'\\')">'+l+(n?'<span class="n">'+n+'</span>':'')+'</button>').join('')+btnTimon;
+}
+function irA(t){tab=t;specAbierto=sqlAbierto=null;pintarNav();pintar()}
+function pintar(){
+  const m=$('#main');
+  if(tab==='timon')return pintarTimon();
+  if(!actual)return pintarGeneral();
+  if(tab==='tablero')return pintarTablero(m);
+  if(tab==='inbox')return pintarInbox(m);
+  if(tab==='specs')return pintarSpecs(m);
+  if(tab==='sql')return pintarSql(m);
+  if(tab==='docs')return pintarDocs(m);
+  if(tab==='run')return pintarRun(m);
+}
+// ---- Vista general (todos los proyectos) ----
+function pintarGeneral(){
+  const tot=PROY.reduce((a,p)=>({p:a.p+p.alertas.pendientes,c:a.c+p.alertas.enConstruccion,s:a.s+p.alertas.construidosSinVerificar,i:a.i+p.alertas.inboxSinProcesar}),{p:0,c:0,s:0,i:0});
+  let h='<div class="cards">'+card(PROY.length,'Proyectos')+card(tot.c,'🔄 En construcción',tot.c>1?'alerta':'')+card(tot.s,'✅ Sin verificar',tot.s>0?'alerta':'bien')+card(tot.p,'🔲 Pendientes')+card(tot.i,'📥 Inbox sin procesar')+'</div>';
+  if(tot.c>1)h+='<div class="seccion" style="border-color:var(--warn)"><b>⚠️ '+tot.c+' frentes de construcción abiertos en total.</b> La regla 18 es uno por proyecto — y en la práctica, uno a la vez en general si quieres cerrar cosas.</div>';
+  if(tot.s>0)h+='<div class="seccion" style="border-color:var(--warn)"><b>⚠️ '+tot.s+' construido(s) esperando verificación.</b> Deja de empezar, empieza a terminar.</div>';
+  h+='<div class="seccion"><h2>Proyectos</h2><div class="grid-proy">';
+  for(const p of PROY){
+    const a=p.alertas,alerta=a.construidosSinVerificar>0||a.enConstruccion>1;
+    h+='<div class="pcard'+(alerta?' alerta':'')+'" onclick="entrar(\\''+p.id+'\\')">'
+      +'<div class="nom">'+(p.corriendo?'<span class="dot on"></span>':'')+esc(p.nombre)+'</div><div class="cod">'+esc(p.codigo)+'</div><div class="pills">'
+      +(a.construidosSinVerificar?'<span class="pill w">✅ sin verificar <b>'+a.construidosSinVerificar+'</b></span>':'')
+      +(a.enConstruccion?'<span class="pill a">🔄 <b>'+a.enConstruccion+'</b></span>':'')
+      +'<span class="pill">🔲 <b>'+a.pendientes+'</b></span>'
+      +(a.inboxSinProcesar?'<span class="pill">📥 <b>'+a.inboxSinProcesar+'</b></span>':'')
+      +(a.sqlPendientes?'<span class="pill">🗄️ <b>'+a.sqlPendientes+'</b></span>':'')
+      +(a.verificados?'<span class="pill g">✔️ <b>'+a.verificados+'</b></span>':'')
+      +(p.tieneChangelog?'':'<span class="pill">sin changelog</span>')
+      +'</div></div>';
+  }
+  $('#main').innerHTML=h+'</div></div>';
+}
+const card=(n,l,cls='')=>'<div class="card '+cls+'"><div class="num">'+n+'</div><div class="lbl">'+l+'</div></div>';
+// ---- Pestaña Timón: gestionar proyectos y actualizar la metodología ----
+let T=null, explorador=null, actLogNext=0, actTimer=null, modoElegir=null;
+async function pintarTimon(){
+  T=await api('/api/timon');
+  const m=$('#main');
+  let h='';
+  // dónde vive Timón
+  h+='<div class="seccion"><h2>Carpeta de Timón</h2>'
+    +(T.valida
+      ? '<div class="item" style="cursor:default"><span>🧭 <code>'+esc(T.rutaTimon)+'</code></span><span class="meta">'+(T.tieneActualizador?'<span class="est est-v">lista</span>':'<span class="est est-b">sin actualizador</span>')+'</span></div>'
+      : '<div class="aviso" style="color:var(--warn)">No encontré la carpeta de Timón (la que tiene <code>plantilla-proyecto-nuevo</code>). Indícala para poder actualizar proyectos e incorporar carpetas nuevas.</div>')
+    +'<div class="fila-form"><input type="text" id="rutaTimon" placeholder="/Users/tu/Downloads/sistema-timon" value="'+esc(T.rutaTimon||'')+'"><button class="btn sec" onclick="elegir(\\'timon\\')">📂 Buscar…</button><button class="btn sec" onclick="guardarRutaTimon()">Guardar</button></div></div>';
+
+  // actualizar
+  h+='<div class="seccion"><h2>Actualizar Timón en los proyectos</h2>'
+    +'<div class="aviso" style="margin-bottom:12px">Lleva las reglas, skills y metodología de la plantilla a cada proyecto. No toca changelog, inbox, specs, Marco, Arquitectura ni la Parte 2 de tu CLAUDE.md, y deja respaldos <code>.bak</code>.</div>'
+    +'<div class="lista">';
+  for(const p of T.proyectos)
+    h+='<div class="item" style="cursor:default"><input type="checkbox" class="chkProy" value="'+esc(p.id)+'" checked><span>'+esc(p.nombre)+'</span><span class="meta"><code style="font-size:11.5px;color:var(--tx2)">'+esc(p.ruta)+'</code><button class="btn sec" style="padding:4px 10px;font-size:12px" onclick="quitarProyecto(\\''+esc(p.ruta)+'\\')">Quitar</button></span></div>';
+  if(!T.proyectos.length)h+='<div class="aviso">Sin proyectos todavía — agrégalos abajo.</div>';
+  h+='</div><div class="fila-form">'
+    +'<button class="btn sec" onclick="correrActualizacion(true)" '+(T.tieneActualizador?'':'disabled')+'>Simular (--dry)</button>'
+    +'<button class="btn" onclick="correrActualizacion(false)" '+(T.tieneActualizador?'':'disabled')+'>Actualizar seleccionados</button>'
+    +'<button class="btn sec" onclick="marcarTodos()">Marcar/desmarcar todos</button></div>'
+    +'<div id="actLogs" style="display:none"><div style="height:12px"></div><div id="logsAct" class="md"><pre><code></code></pre></div></div></div>';
+
+  // agregar / incorporar
+  h+='<div class="seccion"><h2>Agregar un proyecto que ya usa Timón</h2>'
+    +'<div class="fila-form"><input type="text" id="rutaAgregar" placeholder="/Users/tu/otra-carpeta/mi-proyecto" style="flex:3"><button class="btn sec" onclick="elegir(\\'agregar\\')">📂 Buscar…</button><button class="btn" onclick="agregarProy()">Agregar</button></div>'
+    +'<div class="aviso">Para proyectos que viven fuera de <code>'+esc(T.base)+'</code>. Los de adentro se detectan solos.</div></div>';
+
+  h+='<div class="seccion"><h2>Incorporar una carpeta nueva a Timón</h2>'
+    +'<div class="aviso" style="margin-bottom:10px">Copia el kit completo (CLAUDE.md con las reglas, Marco, Arquitectura, changelog, inbox, memoria, specs, metodología y skills) ya renombrado con el código del proyecto. No pisa archivos que ya existan.</div>'
+    +'<div class="fila-form"><input type="text" id="rutaIncorporar" placeholder="/Users/tu/Plataformas/proyecto-nuevo" style="flex:3"><button class="btn sec" onclick="elegir(\\'incorporar\\')">📂 Buscar…</button><input type="text" id="codIncorporar" placeholder="CÓDIGO (ej. RB)" style="max-width:170px"><button class="btn" onclick="incorporarProy()" '+(T.valida?'':'disabled')+'>Incorporar</button></div>'
+    +(T.valida?'':'<div class="aviso" style="color:var(--warn)">Necesitas configurar la carpeta de Timón arriba.</div>')+'</div>';
+
+  m.innerHTML=h;
+  if(explorador)pintarExplorador();
+  if(T.actualizando){$('#actLogs').style.display='block';pollAct()}
+}
+function marcarTodos(){const ch=[...document.querySelectorAll('.chkProy')];const v=!ch.every(c=>c.checked);ch.forEach(c=>c.checked=v)}
+async function guardarRutaTimon(){await api('/api/timon/ruta',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ruta:$('#rutaTimon').value.trim()})});toast('Carpeta de Timón guardada');pintarTimon()}
+async function agregarProy(){const r=$('#rutaAgregar').value.trim();if(!r)return toast('Escribe o elige una ruta');await api('/api/proyectos/agregar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ruta:r})});toast('Proyecto agregado');await refrescarListas();pintarTimon()}
+async function quitarProyecto(r){if(!confirm('¿Quitar este proyecto del panel?\\n\\nSolo se quita de la lista — no se borra ningún archivo.'))return;await api('/api/proyectos/quitar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ruta:r})});toast('Quitado del panel');await refrescarListas();pintarTimon()}
+async function incorporarProy(){
+  const r=$('#rutaIncorporar').value.trim(),cod=$('#codIncorporar').value.trim();
+  if(!r||!cod)return toast('Falta la carpeta o el código');
+  if(!confirm('Se copiará el kit de Timón a:\\n'+r+'\\n\\ncon código '+cod.toUpperCase()+'. ¿Continuar?'))return;
+  const res=await api('/api/proyectos/incorporar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ruta:r,codigo:cod})});
+  toast('Incorporado: '+res.archivos+' archivos como '+res.codigo);await refrescarListas();pintarTimon();
+}
+async function refrescarListas(){const r=await api('/api/proyectos');PROY=r.proyectos;MULTI=r.multi;$('#selProy').innerHTML='<option value="">— Vista general —</option>'+PROY.map(p=>'<option value="'+p.id+'">'+esc(p.nombre)+'</option>').join('')}
+async function correrActualizacion(dry){
+  const ids=[...document.querySelectorAll('.chkProy')].filter(c=>c.checked).map(c=>c.value);
+  if(!ids.length)return toast('No seleccionaste ningún proyecto');
+  if(!dry&&!confirm('Se actualizarán '+ids.length+' proyecto(s).\\n\\nSe modifican reglas, skills y metodología (con respaldo .bak). Changelog, inbox y specs no se tocan.\\n\\n¿Continuar?'))return;
+  await api('/api/timon/actualizar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,dry})});
+  actLogNext=0;$('#actLogs').style.display='block';$('#logsAct').querySelector('code').textContent='';pollAct();
+}
+async function pollAct(){
+  if(tab!=='timon')return;
+  try{
+    const r=await api('/api/timon/logs?since='+actLogNext);
+    if(r.lines.length){const code=$('#logsAct')?.querySelector('code');if(code){code.textContent+=r.lines.map(l=>l.t).join('\\n')+'\\n';actLogNext=r.next;code.parentElement.scrollTop=code.parentElement.scrollHeight}}
+    if(!r.corriendo){if(r.fin)toast(r.fin.dry?'Simulación terminada':'Actualización terminada');await refrescarListas();return}
+  }catch(e){return}
+  clearTimeout(actTimer);actTimer=setTimeout(pollAct,900);
+}
+// explorador de carpetas
+async function elegir(destino){modoElegir=destino;explorador=await api('/api/explorar');pintarExplorador()}
+function pintarExplorador(){
+  const e=explorador;
+  let h='<div class="seccion" id="expl" style="border-color:var(--acc)"><h2>Elegir carpeta</h2>'
+    +'<div class="fila-form" style="margin:0 0 10px"><code style="flex:1;background:var(--bg1);padding:8px 12px;border-radius:9px;font-size:12.5px;overflow-x:auto">'+esc(e.dir)+'</code>'
+    +'<button class="btn" onclick="usarCarpeta()">Usar esta carpeta</button><button class="btn sec" onclick="explorador=null;pintarTimon()">Cancelar</button></div><div class="lista">'
+    +(e.padre?'<div class="item" onclick="navegar(\\''+esc(e.padre)+'\\')"><span>⬆️ ..</span></div>':'');
+  for(const c of e.carpetas)h+='<div class="item" onclick="navegar(\\''+esc(c.ruta)+'\\')"><span>'+(c.esProyecto?'🧭':'📁')+' '+esc(c.nombre)+'</span>'+(c.esProyecto?'<span class="meta"><span class="est est-v">proyecto Timón</span></span>':'')+'</div>';
+  if(!e.carpetas.length)h+='<div class="aviso">Sin subcarpetas.</div>';
+  h+='</div></div>';
+  const prev=$('#expl');if(prev)prev.outerHTML=h;else $('#main').insertAdjacentHTML('afterbegin',h);
+  $('#expl').scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function navegar(d){explorador=await api('/api/explorar?dir='+encodeURIComponent(d));pintarExplorador()}
+function usarCarpeta(){
+  const d=explorador.dir,destino=modoElegir;explorador=null;
+  pintarTimon().then(()=>{
+    const campo=destino==='timon'?'#rutaTimon':destino==='agregar'?'#rutaAgregar':'#rutaIncorporar';
+    const el=$(campo);if(el){el.value=d;el.focus()}
+    if(destino==='timon')toast('Dale Guardar para fijarla');
+  });
+}
+// ---- Tablero de un proyecto ----
+function pintarTablero(m){
+  const a=S.alertas;
+  let h='<div class="cards">'+card(a.pendientes,'🔲 Pendientes')+card(a.enConstruccion,'🔄 En construcción',a.enConstruccion>1?'alerta':'')+card(a.construidosSinVerificar,'✅ Sin verificar',a.construidosSinVerificar>0?'alerta':'bien')+card(a.verificados,'✔️ Verificados','bien')+'</div>';
+  if(a.enConstruccion>1)h+='<div class="seccion" style="border-color:var(--warn)"><b>⚠️ '+a.enConstruccion+' frentes abiertos.</b> Regla 18: máximo uno — congela los demás explícitamente.</div>';
+  if(a.construidosSinVerificar>0)h+='<div class="seccion" style="border-color:var(--warn)"><b>⚠️ '+a.construidosSinVerificar+' construido(s) sin verificar.</b> Corre sus checklists antes de autorizar construcción nueva.</div>';
+  h+='<div class="seccion"><h2>Captura rápida al Inbox (Caja de Cristal)</h2><textarea id="qc" rows="2" placeholder="¿Detectaste algo a media construcción? Una línea aquí y de regreso a tu spec…"></textarea><div class="fila-form"><button class="btn" onclick="capturar()">Anotar al inbox</button></div></div>';
+  if(S.changelog){
+    h+='<div class="seccion"><h2>Changelog — '+esc(S.changelog.file)+'</h2><div class="tablewrap"><table><tr>'+S.changelog.headers.map(x=>'<th>'+esc(x)+'</th>').join('')+'<th></th></tr>';
+    for(const r of S.changelog.rows){
+      h+='<tr>'+r.map((c,i)=>i===S.changelog.iEstado?'<td><span class="est '+claseEst(c)+'">'+esc(c)+'</span></td>':'<td>'+esc(c)+'</td>').join('');
+      h+='<td><select onchange="cambiarEstado(\\''+esc(r[0])+'\\',this)"><option value="">cambiar…</option>'+ESTADOS.map(e=>'<option>'+e+'</option>').join('')+'</select></td></tr>';
+    }
+    h+='</table></div><div class="fila-form"><input type="text" id="nModulo" placeholder="Módulo/Área"><input type="text" id="nQuien" placeholder="Quién pidió"><input type="text" id="nDesc" placeholder="Descripción (sin usar | )" style="flex:3"><button class="btn sec" onclick="nuevaFila()">+ Registrar solicitud</button></div><div class="aviso">✔️ Verificado solo lo marcas tú tras correr el checklist. 🚫 Descartado es un cierre válido.</div></div>';
+  } else h+='<div class="seccion">Este proyecto no tiene CHANGELOG-*.md todavía.</div>';
+  m.innerHTML=h;
+}
+async function capturar(){const t=$('#qc').value.trim();if(!t)return;await api('/api/inbox'+qp(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({texto:t})});toast('Anotado al inbox — de regreso a tu spec 😉');recargar()}
+async function cambiarEstado(id,sel){
+  const e=sel.value;if(!e)return;sel.value='';
+  if(e.includes('✔️')&&!confirm('Regla de Timón: solo tú puedes marcar Verificado.\\n¿Corriste el checklist de '+id+' y TODO pasó?'))return;
+  if(e.includes('🔄')&&(S.alertas.enConstruccion>0||S.alertas.construidosSinVerificar>0)&&!confirm('Regla 18: ya hay '+S.alertas.enConstruccion+' en construcción y '+S.alertas.construidosSinVerificar+' construidos sin verificar.\\n¿Seguro que quieres abrir otro frente?'))return;
+  if(e.includes('🚫')&&!confirm('¿Descartar '+id+'? Queda en el changelog como 🚫 (cierre válido).'))return;
+  let nota=null;
+  if(e.includes('✔️'))nota=prompt('Nota corta de verificación (qué probaste):')||'verificado';
+  if(e.includes('🚫'))nota=prompt('¿Por qué se descarta?')||'descartado en poda';
+  await api('/api/changelog/estado'+qp(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,estado:e,nota})});
+  toast(id+' → '+e);recargar();
+}
+async function nuevaFila(){
+  const d=$('#nDesc').value.trim();if(!d)return toast('Falta la descripción');
+  const r=await api('/api/changelog/nueva'+qp(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({modulo:$('#nModulo').value,quien:$('#nQuien').value,descripcion:d})});
+  toast('Registrado como '+r.id);recargar();
+}
+// ---- Inbox ----
+function pintarInbox(m){
+  if(!S.inbox)return m.innerHTML='<div class="seccion"><h2>Inbox</h2>Este proyecto no tiene INBOX todavía — se crea solo con la primera captura.<textarea id="qc" rows="3" style="margin-top:12px" placeholder="Pega aquí la idea/bug/solicitud tal cual."></textarea><div class="fila-form"><button class="btn" onclick="capturar()">Anotar al inbox</button></div></div>';
+  m.innerHTML='<div class="seccion"><h2>Captura rápida</h2><textarea id="qc" rows="3" placeholder="Pega aquí la idea/bug/solicitud tal cual — sin procesar."></textarea><div class="fila-form"><button class="btn" onclick="capturar()">Anotar al inbox</button></div></div>'
+    +'<div class="seccion"><h2>'+esc(S.inbox.file)+'</h2><div class="md">'+md(S.inbox.contenido)+'</div></div>';
+}
+// ---- Specs ----
+function pintarSpecs(m){
+  if(specAbierto)return pintarEditorSpec(m);
+  let h='<div class="seccion"><h2>Specs</h2><div class="fila-form" style="margin-bottom:12px"><input type="text" id="nSpec" placeholder="Nombre del spec nuevo…"><button class="btn sec" onclick="nuevoSpec()">+ Crear desde plantilla</button></div><div class="lista">';
+  if(!S.specs.length)h+='<div class="aviso">Sin specs todavía.</div>';
+  for(const s of S.specs)h+='<div class="item" onclick="abrirSpec(\\''+esc(s.file)+'\\')"><span>📄 '+esc(s.nombre)+'</span><span class="meta"><span class="est '+(/cerrado/i.test(s.estado)?'est-v':'est-c')+'">'+esc(s.estado)+'</span></span></div>';
+  m.innerHTML=h+'</div></div>';
+}
+async function abrirSpec(f){const r=await api('/api/archivo'+qp()+'&f='+encodeURIComponent(f));specAbierto={file:f,contenido:r.contenido};pintar()}
+function pintarEditorSpec(m){
+  m.innerHTML='<span class="volver" onclick="specAbierto=null;pintar()">← Volver a specs</span>'
+    +'<div class="seccion"><h2>'+esc(specAbierto.file)+'</h2><div class="subtabs"><button class="btn sec" onclick="modoSpec(0)">Vista</button><button class="btn sec" onclick="modoSpec(1)">Editar</button><button class="btn" onclick="guardarSpec()">Guardar</button></div>'
+    +'<div id="specVista" class="md">'+md(specAbierto.contenido)+'</div><textarea id="specTxt" class="editorArea" style="display:none">'+esc(specAbierto.contenido)+'</textarea></div>';
+}
+function modoSpec(ed){$('#specVista').style.display=ed?'none':'block';$('#specTxt').style.display=ed?'block':'none';if(!ed){specAbierto.contenido=$('#specTxt').value;$('#specVista').innerHTML=md(specAbierto.contenido)}}
+async function guardarSpec(){if($('#specTxt').style.display!=='none')specAbierto.contenido=$('#specTxt').value;await api('/api/spec'+qp(),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:specAbierto.file,contenido:specAbierto.contenido})});toast('Spec guardado')}
+async function nuevoSpec(){const n=$('#nSpec').value.trim();if(!n)return;const r=await api('/api/spec/nuevo'+qp(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nombre:n})});S=await api('/api/estado'+qp());abrirSpec(r.file)}
+// ---- SQL ----
+function pintarSql(m){
+  if(sqlAbierto)return pintarVerSql(m);
+  let h='<div class="seccion"><h2>SQL del proyecto</h2><div class="aviso" style="margin-bottom:10px">v1 segura: aquí los ves y los copias para pegarlos en Supabase/tu editor SQL. El check de "aplicado" es tu registro.</div><div class="lista">';
+  if(!S.sql.length)h+='<div class="aviso">No hay .sql en las carpetas configuradas (sql, migrations, db, database, supabase/migrations).</div>';
+  for(const s of S.sql)h+='<div class="item"><input type="checkbox" '+(s.aplicado?'checked':'')+' onclick="event.stopPropagation();marcarSql(\\''+esc(s.rel)+'\\',this.checked)"><span onclick="abrirSql(\\''+esc(s.rel)+'\\')" style="flex:1">🗄️ '+esc(s.rel)+'</span><span class="meta">'+(s.aplicado?'<span class="est est-v">aplicado '+esc(s.aplicado)+'</span>':'<span class="est est-b">pendiente</span>')+'</span></div>';
+  m.innerHTML=h+'</div></div>';
+}
+async function abrirSql(rel){const r=await api('/api/archivo'+qp()+'&f='+encodeURIComponent(rel));sqlAbierto={rel,contenido:r.contenido};pintar()}
+function pintarVerSql(m){m.innerHTML='<span class="volver" onclick="sqlAbierto=null;pintar()">← Volver a SQL</span><div class="seccion"><h2>'+esc(sqlAbierto.rel)+'</h2><div class="subtabs"><button class="btn" onclick="copiarSql()">📋 Copiar todo</button></div><pre class="md"><code>'+esc(sqlAbierto.contenido)+'</code></pre></div>'}
+async function copiarSql(){await navigator.clipboard.writeText(sqlAbierto.contenido);toast('SQL copiado — pégalo en tu editor de base de datos')}
+async function marcarSql(rel,v){await api('/api/sql/aplicado'+qp(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rel,aplicado:v})});recargar()}
+// ---- Docs ----
+function pintarDocs(m){let h='<div class="seccion"><h2>Documentos del proyecto</h2><div class="lista">';for(const d of S.docs)h+='<div class="item" onclick="abrirDoc(\\''+esc(d)+'\\')"><span>📘 '+esc(d)+'</span></div>';m.innerHTML=h+'</div></div>'}
+async function abrirDoc(f){const r=await api('/api/archivo'+qp()+'&f='+encodeURIComponent(f));$('#main').innerHTML='<span class="volver" onclick="pintar()">← Volver a docs</span><div class="seccion"><h2>'+esc(f)+'</h2><div class="md">'+md(r.contenido)+'</div></div>'}
+// ---- Correr ----
+function pintarRun(m){
+  m.innerHTML='<div class="seccion"><h2>Correr '+esc(S.proyecto.nombre)+'</h2><div class="fila-form" style="align-items:center"><code style="background:var(--bg1);padding:8px 12px;border-radius:9px;font-family:JetBrains Mono,monospace;font-size:13px">'+esc(S.run.comando)+'</code>'
+    +'<button class="btn" id="btnStart" onclick="runStart()" '+(S.run.corriendo?'disabled':'')+'>▶ Iniciar</button>'
+    +'<button class="btn rojo" id="btnStop" onclick="runStop()" '+(S.run.corriendo?'':'disabled')+'>■ Detener</button></div>'
+    +'<div class="aviso">El comando se cambia en el <code>timon.config.json</code> de este proyecto. Puedes tener varios proyectos corriendo a la vez.</div></div>'
+    +'<div class="seccion"><h2>Logs</h2><div id="logs"></div></div>';
+  logNext=0;$('#logs').textContent='';pollLogs();
+}
+async function runStart(){await api('/api/run/start'+qp(),{method:'POST'});toast('Arrancando…');setTimeout(()=>recargar(),700)}
+async function runStop(){await api('/api/run/stop'+qp(),{method:'POST'});toast('Deteniendo…');setTimeout(()=>recargar(),900)}
+async function pollLogs(){
+  if(tab!=='run'||!actual)return;
+  try{
+    const r=await api('/api/run/logs'+qp()+'&since='+logNext);
+    if(r.lines.length){const el=$('#logs');const abajo=el.scrollTop+el.clientHeight>=el.scrollHeight-30;el.textContent+=r.lines.map(l=>l.t).join('\\n')+'\\n';logNext=r.next;if(abajo)el.scrollTop=el.scrollHeight}
+    $('#hDot').className='dot'+(r.corriendo?' on':'');$('#hRun').textContent=r.corriendo?'corriendo':'detenido';
+    if($('#btnStart')){$('#btnStart').disabled=r.corriendo;$('#btnStop').disabled=!r.corriendo}
+  }catch(e){}
+  clearTimeout(logTimer);logTimer=setTimeout(pollLogs,1500);
+}
+// ---- mini markdown ----
+function md(src){
+  if(!src)return'';
+  const lines=src.split('\\n');let out=[],inCode=false,inList=false,tabla=[];
+  const inline=s=>esc(s).replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>').replace(/\`([^\`]+)\`/g,'<code>$1</code>').replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g,'<a href="$2" target="_blank" style="color:var(--acc)">$1</a>');
+  const flushTabla=()=>{if(!tabla.length)return;let h='<div class="tablewrap"><table>';tabla.forEach((c,i)=>{if(c.every(x=>/^[-:\\s]*$/.test(x)))return;h+='<tr>'+c.map(x=>(i===0?'<th>':'<td>')+inline(x)+(i===0?'</th>':'</td>')).join('')+'</tr>'});out.push(h+'</table></div>');tabla=[]};
+  const cerrarLista=()=>{if(inList){out.push('</ul>');inList=false}};
+  for(const l of lines){
+    if(l.trim().startsWith('\`\`\`')){flushTabla();cerrarLista();out.push(inCode?'</code></pre>':'<pre><code>');inCode=!inCode;continue}
+    if(inCode){out.push(esc(l)+'\\n');continue}
+    if(l.trim().startsWith('|')){cerrarLista();tabla.push(l.trim().split('|').slice(1,-1).map(c=>c.trim()));continue}
+    flushTabla();
+    if(/^#{1,4}\\s/.test(l)){cerrarLista();const n=Math.min(l.match(/^#+/)[0].length,3);out.push('<h'+n+'>'+inline(l.replace(/^#+\\s*/,''))+'</h'+n+'>');continue}
+    if(/^---+\\s*$/.test(l.trim())){cerrarLista();out.push('<hr>');continue}
+    if(/^\\s*[-*]\\s/.test(l)){if(!inList){out.push('<ul>');inList=true}out.push('<li>'+inline(l.replace(/^\\s*[-*]\\s/,''))+'</li>');continue}
+    if(/^>\\s?/.test(l)){cerrarLista();out.push('<blockquote>'+inline(l.replace(/^>\\s?/,''))+'</blockquote>');continue}
+    if(l.trim()===''){cerrarLista();continue}
+    cerrarLista();out.push('<p>'+inline(l)+'</p>');
+  }
+  flushTabla();cerrarLista();if(inCode)out.push('</code></pre>');
+  return out.join('');
+}
+inicio();
+setInterval(()=>{if(tab!=='run'&&tab!=='timon'&&!specAbierto&&!sqlAbierto)actual?recargar():refrescarGeneral()},20000);
+</script>
+</body></html>`;
+
+// ---------- arranque ----------
+descubrir();
+function listen(puerto, intentos = 0) {
+  server.once('error', err => {
+    if (err.code === 'EADDRINUSE' && intentos < 10) { console.log(`Puerto ${puerto} ocupado, probando ${puerto + 1}…`); listen(puerto + 1, intentos + 1); }
+    else { console.error('No pude arrancar el panel:', err.message); process.exit(1); }
+  });
+  server.listen(puerto, '127.0.0.1', () => {
+    const url = `http://localhost:${puerto}`;
+    console.log(`\n  🧭 Panel Timón`);
+    console.log(`  Carpeta base: ${BASE}`);
+    console.log(`  Proyectos detectados: ${PROYECTOS.length}${PROYECTOS.length ? ' — ' + PROYECTOS.map(p => p.nombre).join(', ') : ''}`);
+    console.log(`  Abierto en ${url}  (Ctrl+C para cerrar)\n`);
+    try {
+      const abrir = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      spawn(abrir, [url], { shell: process.platform === 'win32', stdio: 'ignore', detached: true }).unref();
+    } catch { }
+  });
+}
+listen(CONFIG_BASE.puerto);
+process.on('SIGINT', () => { for (const p of PROYECTOS) runStop(p); setTimeout(() => process.exit(0), 300); });

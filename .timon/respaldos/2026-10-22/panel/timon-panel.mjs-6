@@ -1,0 +1,1641 @@
+#!/usr/bin/env node
+/**
+ * Panel Timón v2 — tablero local, uno o varios proyectos.
+ * Un solo archivo, cero dependencias. Requiere Node 18+.
+ *
+ * Dos modos, se detecta solo:
+ *   • MULTI — si lo abres en una carpeta que CONTIENE proyectos (ej. /Plataformas/):
+ *     descubre todos los proyectos Timón adentro y los controla desde un mismo panel.
+ *   • SENCILLO — si lo abres dentro de un proyecto: solo ese, como siempre.
+ *
+ * Arranque:  node timon-panel.mjs [carpeta]   (o doble clic en Panel-Timon.command)
+ *            node timon-panel.mjs --central   (panel único: busca fichas .tmn en tus carpetas raíz)
+ * Se abre en http://localhost:4444
+ *
+ * Los .md de cada proyecto siguen siendo la fuente de verdad — el panel solo los lee
+ * y escribe. Solo escucha en 127.0.0.1.
+ */
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+// Base de cobro de Timón (Ajustes): cada proyecto la usa salvo que tenga su precio especial (TMN-042)
+const cobroBase = () => ({ valorPunto: num((CONFIG_BASE || {}).valorPunto) || 400, bolsaPct: (CONFIG_BASE || {}).bolsaPct === undefined ? 12 : num(CONFIG_BASE.bolsaPct) });
+const DEFAULTS = {
+  puerto: 4444,
+  comandoRun: 'npm run dev',
+  cwdRun: '.',
+  carpetasSql: ['sql', 'migrations', 'db', 'database', 'supabase/migrations'],
+};
+const IGNORAR = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.venv', 'vendor', 'Library', '.cache', 'coverage', '.turbo', 'panel', '_to_delete', 'archivo', 'archivo-v1', 'respaldo-v1', 'Claude outputs', '__pycache__', '_respaldos', 'plantilla-proyecto-nuevo', 'nuevo proyecto', '.timon']);
+
+// ---------- detección de proyectos ----------
+const leer = f => { try { return fs.readFileSync(f, 'utf8'); } catch { return null; } };
+function esProyecto(d) {
+  try {
+    const f = fs.readdirSync(d);
+    return f.includes('00-MARCO.md') || f.includes('CLAUDE.md') || f.some(x => x.endsWith('.tmn'))
+      || f.some(x => /^CHANGELOG-.+\.md$/i.test(x)) || f.some(x => /^INBOX-.+\.md$/i.test(x));
+  } catch { return false; }
+}
+// Raíz de proyecto para la búsqueda: tiene .tmn, o es Timón (changelog o Marco). Un CLAUDE.md solo no basta:
+// así una carpeta contenedora (ej. Idea/ con su CLAUDE.md) no tapa al proyecto real que vive adentro.
+function esRaizProyecto(d) {
+  try {
+    const f = fs.readdirSync(d);
+    return f.some(x => x.endsWith('.tmn')) || f.includes('00-MARCO.md')
+      || f.some(x => /^CHANGELOG-.+\.md$/i.test(x) && !/\[CODIGO\]|archivo/i.test(x));
+  } catch { return false; }
+}
+function buscarProyectos(padre, prof = 0, out = []) {
+  if (prof > 4) return out;
+  let entradas; try { entradas = fs.readdirSync(padre, { withFileTypes: true }); } catch { return out; }
+  for (const e of entradas) {
+    if (!e.isDirectory() || e.name.startsWith('.') || IGNORAR.has(e.name)) continue;
+    const d = path.join(padre, e.name);
+    if (esRaizProyecto(d)) out.push(d); else buscarProyectos(d, prof + 1, out);
+  }
+  return out;
+}
+function cargarConfig(dir) {
+  try { return { ...DEFAULTS, ...JSON.parse(leer(path.join(dir, 'timon.config.json')) || '{}') }; }
+  catch { return { ...DEFAULTS }; }
+}
+
+// dónde buscar: argumento, o la carpeta del script / su padre
+// Modo central (--central): un solo panel para todo; busca proyectos en las carpetas raíz y guarda su
+// configuración en ~/.timon/panel.json. Sin --central funciona como siempre.
+const MODO_CENTRAL = process.argv.includes('--central');
+const argRuta = process.argv.slice(2).find(a => !a.startsWith('-'));
+let BASE = MODO_CENTRAL ? os.homedir() : argRuta ? path.resolve(argRuta.replace(/^~/, os.homedir())) : SCRIPT_DIR;
+if (!MODO_CENTRAL && !argRuta && !esProyecto(BASE) && esProyecto(path.dirname(BASE))) BASE = path.dirname(BASE);
+const CONFIG_FILE = MODO_CENTRAL ? path.join(os.homedir(), '.timon', 'panel.json') : path.join(BASE, 'timon.config.json');
+const RAICES_DEFAULT = ['~/Downloads/Plataformas', '~/Developer', '~/Downloads/Sistemas'];
+function leerConfigBase() {
+  let c; try { c = JSON.parse(leer(CONFIG_FILE) || '{}'); } catch { c = {}; }
+  if (MODO_CENTRAL && !Array.isArray(c.carpetasProyectos)) c.carpetasProyectos = RAICES_DEFAULT;
+  if (MODO_CENTRAL && !c.puerto) c.puerto = 4400; // así no choca con los paneles de cada proyecto (4444)
+  return { ...DEFAULTS, ...c };
+}
+let CONFIG_BASE = leerConfigBase();
+const abs = r => path.resolve(BASE, String(r).replace(/^~/, os.homedir()));
+function guardarConfigBase() {
+  const { comandoRun, cwdRun, carpetasSql, ...propio } = CONFIG_BASE; // no persistir los defaults heredados
+  const guardar = { puerto: CONFIG_BASE.puerto, ...propio };
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(guardar, null, 2));
+  CONFIG_BASE = leerConfigBase();
+}
+
+// ---------- dónde vive Timón (la plantilla + el actualizador) ----------
+function detectarTimon() {
+  if (CONFIG_BASE.rutaTimon) { const r = abs(CONFIG_BASE.rutaTimon); if (esTimonValido(r)) return r; }
+  const candidatos = [
+    path.join(BASE, 'sistema-timon'), path.join(path.dirname(BASE), 'sistema-timon'),
+    path.join(os.homedir(), 'Downloads', 'sistema-timon'), path.join(os.homedir(), 'Downloads', 'Sistemas', 'sistema-timon'), path.join(os.homedir(), 'sistema-timon'),
+    path.join(BASE, 'timon'), path.join(path.dirname(BASE), 'timon'),
+  ];
+  return candidatos.find(esTimonValido) || null;
+}
+const NOMBRES_PLANTILLA = ['plantilla-proyecto-nuevo', 'nuevo proyecto'];
+const carpetaPlantilla = d => { try { return NOMBRES_PLANTILLA.map(n => path.join(d, n)).find(x => fs.existsSync(x)) || null; } catch { return null; } };
+const esTimonValido = d => !!carpetaPlantilla(d);
+let RUTA_TIMON = detectarTimon();
+const plantillaDir = () => RUTA_TIMON ? carpetaPlantilla(RUTA_TIMON) : null;
+
+let PROYECTOS = [];
+function descubrir() {
+  CONFIG_BASE = leerConfigBase();
+  const rutas = [];
+  const registrados = Array.isArray(CONFIG_BASE.proyectos) ? CONFIG_BASE.proyectos : [];
+  const quitados = new Set((Array.isArray(CONFIG_BASE.ocultos) ? CONFIG_BASE.ocultos : []).map(abs));
+
+  if (Array.isArray(CONFIG_BASE.carpetasProyectos) && CONFIG_BASE.carpetasProyectos.length) {
+    for (const r of CONFIG_BASE.carpetasProyectos) {
+      const d = abs(r);
+      if (esRaizProyecto(d)) rutas.push(d); else rutas.push(...buscarProyectos(d));
+    }
+  } else if (esProyecto(BASE)) rutas.push(BASE);
+  else {
+    rutas.push(...buscarProyectos(BASE));
+    if (!rutas.length && esProyecto(path.dirname(BASE))) rutas.push(path.dirname(BASE));
+  }
+  for (const r of registrados) { const d = abs(r); if (fs.existsSync(d)) rutas.push(d); }
+  for (let i = rutas.length - 1; i >= 0; i--) if (quitados.has(rutas[i])) rutas.splice(i, 1);
+  PROYECTOS = [...new Set(rutas)].map(ruta => {
+    const cfg = cargarConfig(ruta);
+    const cl = archivoRaiz(ruta, /^CHANGELOG-[^.]+\.md$/i);
+    const m = cl && path.basename(cl).match(/^CHANGELOG-(.+)\.md$/i);
+    const t = leerTmn(ruta), d = (t && t.datos) || {};
+    const codigo = d.codigo || cfg.codigo || (m ? m[1] : path.basename(ruta).slice(0, 6).toUpperCase());
+    return {
+      id: Buffer.from(ruta).toString('base64url').slice(-24), ruta, cfg, codigo,
+      nombre: d.nombre || path.basename(ruta),
+      tmn: t ? d : null, tmnFile: t ? t.file : null, tmnError: t ? t.error || null : null,
+      cliente: d.cliente || '', marca: d.marca || '', estado: d.estado || '', color: d.color || '', descripcion: d.descripcion || '',
+      etapa: d.etapa || '', timonVersion: d.timonVersion || '',
+    };
+  }).sort((a, b) => (a.cliente || '~').localeCompare(b.cliente || '~') || a.nombre.localeCompare(b.nombre));
+}
+function archivoRaiz(raiz, re) {
+  try { const f = fs.readdirSync(raiz).find(f => re.test(f) && !/archivo/i.test(f)); return f ? path.join(raiz, f) : null; } catch { return null; }
+}
+const proyPorId = id => PROYECTOS.find(p => p.id === id) || PROYECTOS[0];
+
+// ---------- archivo .tmn (ficha del proyecto) ----------
+// JSON en la raíz del proyecto (proyecto.tmn). Ver README-PANEL.md para el formato.
+const tmnDe = d => { try { const f = fs.readdirSync(d).find(x => x.endsWith('.tmn')); return f ? path.join(d, f) : null; } catch { return null; } };
+function leerTmn(d) {
+  const f = tmnDe(d);
+  if (!f) return null;
+  try { return { file: f, datos: JSON.parse(leer(f) || '{}') }; }
+  catch (e) { return { file: f, datos: {}, error: 'El .tmn no es JSON válido: ' + e.message }; }
+}
+const ESTADOS_TMN = ['activo', 'pausado', 'entregado', 'idea'];
+function lanzadoresDe(p) {
+  const l = p.tmn && Array.isArray(p.tmn.lanzadores) ? p.tmn.lanzadores.filter(x => x && x.comando) : [];
+  if (l.length) return l.map(x => ({ nombre: x.nombre || x.comando, comando: x.comando, carpeta: x.carpeta || '.', url: x.url || '' }));
+  return [{ nombre: 'Desarrollo', comando: p.cfg.comandoRun || DEFAULTS.comandoRun, carpeta: p.cfg.cwdRun || '.', url: '', sugerido: !p.tmn }];
+}
+function sugerirTmn(p) {
+  const ls = d => { try { return fs.readdirSync(d); } catch { return []; } };
+  const raiz = ls(p.ruta);
+  const lanzadores = [];
+  const deNpm = (dir, rel) => {
+    let pkg; try { pkg = JSON.parse(leer(path.join(dir, 'package.json')) || 'null'); } catch { pkg = null; }
+    if (!pkg || !pkg.scripts) return false;
+    const deps = JSON.stringify({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) });
+    const url = /"next"/.test(deps) ? 'http://localhost:3000' : /"vite"/.test(deps) ? 'http://localhost:5173' : '';
+    if (pkg.scripts.dev) lanzadores.push({ nombre: rel === '.' ? 'Desarrollo' : 'Desarrollo · ' + rel, comando: 'npm run dev', carpeta: rel, url });
+    else if (pkg.scripts.start) lanzadores.push({ nombre: rel === '.' ? 'Iniciar' : 'Iniciar · ' + rel, comando: 'npm start', carpeta: rel, url });
+    else return false;
+    return true;
+  };
+  if (p.cfg.comandoRun && p.cfg.comandoRun !== DEFAULTS.comandoRun) lanzadores.push({ nombre: 'Desarrollo', comando: p.cfg.comandoRun, carpeta: p.cfg.cwdRun || '.', url: '' });
+  if (!lanzadores.length && !deNpm(p.ruta, '.')) {
+    for (const sub of raiz.filter(x => !IGNORAR.has(x) && !x.startsWith('.')).slice(0, 40))
+      if (lanzadores.length < 3 && fs.existsSync(path.join(p.ruta, sub, 'package.json'))) deNpm(path.join(p.ruta, sub), sub);
+  }
+  for (const c of raiz.filter(x => x.endsWith('.command') && !/diagn|crear|empaquet|mudar|actualizar|adelgazar|panel-timon/i.test(x)))
+    lanzadores.push({ nombre: c.replace(/\.command$/, ''), comando: 'zsh "./' + c + '"', carpeta: '.', url: '' });
+  if (!lanzadores.length) for (const h of ['index.html', 'app/index.html', 'public/index.html'])
+    if (fs.existsSync(path.join(p.ruta, h))) { lanzadores.push({ nombre: 'Abrir en el navegador', comando: 'open "' + h + '"', carpeta: '.', url: '' }); break; }
+  const marco = leer(path.join(p.ruta, '00-MARCO.md')) || '';
+  const titulo = (marco.match(/^#\s+(.+)$/m) || [])[1] || '';
+  const partes = titulo.split(/\s+[—·-]\s+/).map(x => x.trim()).filter(Boolean);
+  const nombre = (partes.length > 1 ? partes[partes.length - 1] : '').replace(/\s*\([^)]*\)\s*$/, '') || path.basename(p.ruta);
+  const que = (marco.match(/##\s*Qu[eé] es[^\n]*\n+([^\n#][^\n]*)/i) || [])[1] || '';
+  const padre = path.dirname(p.ruta);
+  const raices = (CONFIG_BASE.carpetasProyectos || []).map(abs);
+  const cliente = raices.includes(padre) ? '' : path.basename(padre);
+  return {
+    timon: 1, nombre, codigo: p.codigo, cliente, marca: '', estado: 'activo', color: '',
+    descripcion: que.replace(/\*\*/g, '').slice(0, 220), lanzadores, ligas: [], relacionados: [],
+  };
+}
+function guardarTmn(p, datos) {
+  const prev = (leerTmn(p.ruta) || {}).datos || {};
+  const limpio = {
+    ...prev,
+    timon: 1,
+    nombre: String(datos.nombre || p.nombre).trim(), codigo: String(datos.codigo || p.codigo).trim(),
+    cliente: String(datos.cliente || '').trim(), marca: String(datos.marca || '').trim(),
+    estado: ESTADOS_TMN.includes(datos.estado) ? datos.estado : 'activo',
+    etapa: ETAPAS.includes(datos.etapa) ? datos.etapa : (prev.etapa || ''),
+    color: /^#[0-9a-f]{6}$/i.test(datos.color || '') ? datos.color : '',
+    descripcion: String(datos.descripcion || '').trim(),
+    lanzadores: (Array.isArray(datos.lanzadores) ? datos.lanzadores : []).filter(x => x && String(x.comando || '').trim())
+      .map(x => ({ nombre: String(x.nombre || '').trim() || String(x.comando).trim(), comando: String(x.comando).trim(), carpeta: String(x.carpeta || '.').trim() || '.', url: String(x.url || '').trim() })),
+    ligas: (Array.isArray(datos.ligas) ? datos.ligas : []).filter(x => x && /^https?:\/\//.test(x.url || '')).map(x => ({ nombre: String(x.nombre || x.url).trim(), url: x.url.trim() })),
+    relacionados: (Array.isArray(datos.relacionados) ? datos.relacionados : String(datos.relacionados || '').split(','))
+      .map(x => String(x).trim()).filter(Boolean),
+  };
+  const file = p.tmnFile || path.join(p.ruta, 'proyecto.tmn');
+  fs.writeFileSync(file, JSON.stringify(limpio, null, 2) + '\n');
+  return path.basename(file);
+}
+
+// ---------- Biblioteca (lector de archivos) ----------
+// El panel usa el editor de Sistemas (editor-servidor.mjs) como lector: lo arranca si no está corriendo
+// y lo abre apuntado a la carpeta del proyecto (?raiz=…&todos=1).
+const PUERTO_BIB = 4410;
+let procBib = null;
+function rutaBiblioteca() {
+  const cand = [CONFIG_BASE.biblioteca && abs(CONFIG_BASE.biblioteca), RUTA_TIMON && path.join(path.dirname(RUTA_TIMON), 'editor-servidor.mjs'),
+    path.join(os.homedir(), 'Downloads', 'Sistemas', 'editor-servidor.mjs'), path.join(SCRIPT_DIR, '..', '..', '..', 'editor-servidor.mjs')].filter(Boolean);
+  return cand.find(f => fs.existsSync(f)) || null;
+}
+const pingBib = async () => { try { const r = await fetch(`http://127.0.0.1:${PUERTO_BIB}/api/ping`, { signal: AbortSignal.timeout(800) }); return r.ok; } catch { return false; } };
+async function asegurarBiblioteca() {
+  if (await pingBib()) return true;
+  const f = rutaBiblioteca();
+  if (!f) throw new Error('No encontré editor-servidor.mjs (la Biblioteca de Sistemas)');
+  if (!procBib) {
+    procBib = spawn(process.execPath, [f], { cwd: path.dirname(f), stdio: 'ignore', env: { ...process.env, PORT: String(PUERTO_BIB) } });
+    procBib.on('exit', () => { procBib = null; });
+  }
+  for (let i = 0; i < 20; i++) { await new Promise(r => setTimeout(r, 150)); if (await pingBib()) return true; }
+  throw new Error('La Biblioteca no respondió');
+}
+
+// ---------- archivos del proyecto ----------
+const EXT_TEXTO = /\.(md|markdown|txt|json|tmn|js|mjs|cjs|ts|tsx|jsx|css|scss|html|htm|py|sql|yml|yaml|toml|ini|env\.example|sh|command|csv|svg|xml|gitignore|prisma|vue|svelte|rb|go|rs|swift|kt|java|c|h|cpp)$/i;
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf', mp4: 'video/mp4', mov: 'video/quicktime', ico: 'image/x-icon' };
+function listarCarpeta(p, rel) {
+  const dir = dentro(p.ruta, rel || '.');
+  if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error('Esa carpeta no existe en el proyecto');
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === '.DS_Store' || e.name === '.git' || e.name === 'node_modules') continue;
+    const full = path.join(dir, e.name), r = path.relative(p.ruta, full);
+    let size = 0, mtime = 0;
+    try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs; } catch { }
+    out.push({ nombre: e.name, rel: r, dir: e.isDirectory(), size, mtime, oculto: e.name.startsWith('.') || IGNORAR.has(e.name) });
+  }
+  return out.sort((a, b) => (b.dir - a.dir) || a.nombre.localeCompare(b.nombre, 'es', { numeric: true, sensitivity: 'base' }));
+}
+function esTexto(full) {
+  if (EXT_TEXTO.test(full)) return true;
+  try { const fd = fs.openSync(full, 'r'); const b = Buffer.alloc(4096); const n = fs.readSync(fd, b, 0, 4096, 0); fs.closeSync(fd); return n === 0 || !b.subarray(0, n).includes(0); } catch { return false; }
+}
+function leerArchivoProyecto(p, rel) {
+  const full = dentro(p.ruta, rel || '');
+  if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) throw new Error('No existe ese archivo');
+  const size = fs.statSync(full).size, ext = (path.extname(full).slice(1) || '').toLowerCase();
+  if (MIME[ext] && ext !== 'svg') return { tipo: 'medio', mime: MIME[ext], size };
+  if (size > 1.5 * 1024 * 1024) return { tipo: 'grande', size };
+  if (!esTexto(full)) return { tipo: 'binario', size };
+  return { tipo: 'texto', contenido: leer(full), size, ext };
+}
+function guardarArchivoProyecto(p, rel, contenido) {
+  const full = dentro(p.ruta, rel || '');
+  if (!full || full === p.ruta) throw new Error('Ruta fuera del proyecto');
+  if (fs.existsSync(full) && !esTexto(full)) throw new Error('Solo se pueden editar archivos de texto');
+  if (!fs.existsSync(full) && !/\.(md|txt|tmn|json)$/i.test(full)) throw new Error('Desde el panel solo se crean archivos .md, .txt, .json o .tmn');
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, String(contenido ?? ''));
+}
+// abrir en la Mac: carpeta en Finder, archivo con su app, Terminal en la carpeta, o una URL
+function abrirEnMac(p, { tipo, rel, url }) {
+  const bin = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  let args;
+  if (tipo === 'url') { if (!/^https?:\/\//.test(url || '')) throw new Error('URL inválida'); args = [url]; }
+  else {
+    const full = dentro(p.ruta, rel || '.');
+    if (!full || !fs.existsSync(full)) throw new Error('No existe esa ruta en el proyecto');
+    if (tipo === 'finder') args = fs.statSync(full).isDirectory() ? [full] : ['-R', full];
+    else if (tipo === 'terminal') args = process.platform === 'darwin' ? ['-a', 'Terminal', fs.statSync(full).isDirectory() ? full : path.dirname(full)] : [full];
+    else if (tipo === 'app') args = [full];
+    else throw new Error('Tipo de apertura desconocido');
+  }
+  spawn(bin, args, { stdio: 'ignore', detached: true }).unref();
+}
+
+// ---------- rutas seguras ----------
+const dentro = (raiz, p) => { const r = path.resolve(raiz, p); return r === raiz || r.startsWith(raiz + path.sep) ? r : null; };
+const changelogDe = p => archivoRaiz(p.ruta, /^CHANGELOG-[^.]+\.md$/i);
+const inboxDe = p => archivoRaiz(p.ruta, /^INBOX-[^.]+\.md$/i);
+
+// ---------- changelog ----------
+// Parte una fila de tabla markdown en celdas, respetando \| y los | dentro de `código`.
+function celdasFila(l) {
+  const t = l.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const out = []; let cur = '', code = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch === '\\' && t[i + 1] === '|') { cur += '\\|'; i++; continue; }
+    if (ch === '`') code = !code;
+    if (ch === '|' && !code) { out.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function parseChangelog(p) {
+  const file = changelogDe(p);
+  if (!file) return { file: null, headers: [], rows: [], lines: [] };
+  const lines = (leer(file) || '').split('\n');
+  let headers = [], rows = [], headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l.startsWith('|')) continue;
+    const cells = celdasFila(l);
+    if (headerIdx === -1) { headers = cells; headerIdx = i; continue; }
+    if (/^[-:\s|]+$/.test(l)) continue;
+    if (cells.length && cells.some(c => c !== '')) rows.push({ i, cells });
+  }
+  return { file, headers, rows, lines };
+}
+const colIndex = (h, n, fb) => { const i = h.findIndex(x => x.toLowerCase().includes(n)); return i >= 0 ? i : fb; };
+function actualizarEstado(p, id, estado, nota, agregar = false) {
+  const cl = parseChangelog(p);
+  if (!cl.file) throw new Error('Este proyecto no tiene changelog');
+  const row = cl.rows.find(r => r.cells[0] === id);
+  if (!row) throw new Error(`No encontré la fila ${id}`);
+  row.cells[colIndex(cl.headers, 'estado', 5)] = estado;
+  if (nota) { const iv = colIndex(cl.headers, 'verificaci', 7), prev = (row.cells[iv] || '').trim(); row.cells[iv] = agregar && prev ? prev + ' · ' + nota : nota; }
+  cl.lines[row.i] = '| ' + row.cells.join(' | ') + ' |';
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+  return row.cells;
+}
+function agregarFila(p, { modulo = '', quien = '', descripcion, herramienta = '', tipo = '', donde = '' }) {
+  if (tipo || donde) asegurarColumnas(p);
+  const cl = parseChangelog(p);
+  if (!cl.file) throw new Error('Este proyecto no tiene changelog');
+  let max = 0;
+  for (const r of cl.rows) { const m = r.cells[0].match(/-(\d+)\s*$/); if (m) max = Math.max(max, +m[1]); }
+  const id = `${p.codigo}-${String(max + 1).padStart(3, '0')}`;
+  // cada valor va a su columna por nombre (no todos los changelogs tienen el mismo orden)
+  const H = cl.headers.length ? cl.headers : ['ID', 'Fecha', 'Módulo/Área', 'Quién pidió', 'Descripción', 'Estado', 'Herramienta', 'Verificación'];
+  const valores = [[/^id$/i, id], [/^fecha/i, HOY_ISO()], [/m[oó]dulo|[aá]rea/i, sinBarras(modulo)], [/qui[eé]n/i, sinBarras(quien)], [/descrip|solicitud/i, sinBarras(descripcion)], [/^estado/i, '🔲 Pendiente'],
+    [/herramienta/i, sinBarras(herramienta)], [/verificaci/i, '—'], [/^tipo$/i, TIPOS_SOL.includes(tipo) ? tipo : ''], [/^d[oó]nde$/i, sinBarras(donde)]];
+  const celdas = H.map(h => { const v = valores.find(([re]) => re.test(String(h).trim())); return v ? v[1] : ''; });
+  if (!celdas.includes(id)) celdas[0] = id;
+  const fila = '| ' + celdas.join(' | ') + ' |';
+  let after = -1;
+  for (let i = 0; i < cl.lines.length; i++) if (cl.lines[i].trim().startsWith('|')) after = i;
+  if (after === -1) throw new Error('El changelog no tiene tabla');
+  cl.lines.splice(after + 1, 0, fila);
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+  return id;
+}
+function capturarInbox(p, texto) {
+  let file = inboxDe(p);
+  if (!file) { file = path.join(p.ruta, `INBOX-${p.codigo}.md`); fs.writeFileSync(file, `# INBOX — ${p.codigo}\n\nCaptura sin procesar.\n\n---\n`); }
+  fs.appendFileSync(file, `\n## ${new Date().toISOString().slice(0, 10)} — Captura rápida (Panel)\n\n${texto.trim()}\n\n_Sin procesar._\n`);
+}
+
+// ---------- puntos (cotización) ----------
+// PUNTOS-[CODIGO].md: tabla de parámetros + registro por solicitud (ID · Tipo · Puntos · Cobrado · Nota).
+const puntosDe = p => archivoRaiz(p.ruta, /^PUNTOS-[^.]+\.md$/i);
+const TIPOS_PUNTOS = ['Contratado', 'Garantía', 'Cortesía', 'Extra', 'Iguala', 'Por decidir'];
+const num = v => { const n = parseFloat(String(v ?? '').replace(/,/g, '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : n; };
+const normTipo = v => { const t = String(v || '').toLowerCase(); return t.startsWith('contrat') ? 'Contratado' : t.startsWith('garant') ? 'Garantía' : t.startsWith('cortes') ? 'Cortesía' : t.startsWith('extra') ? 'Extra' : t.startsWith('iguala') ? 'Iguala' : t.startsWith('por decidir') ? 'Por decidir' : null; };
+function parsePuntos(p) {
+  const file = puntosDe(p);
+  if (!file) return null;
+  const lines = (leer(file) || '').split('\n');
+  const params = {}, filas = [];
+  let modo = null, cols = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l.startsWith('|')) { modo = null; continue; }
+    if (/^[-:\s|]+$/.test(l)) continue;
+    const c = l.split('|').slice(1, -1).map(x => x.trim());
+    if (!modo) {
+      const h = c.map(x => x.toLowerCase());
+      if (h.includes('tipo')) { modo = 'registro'; cols = { id: Math.max(0, h.indexOf('id')), tipo: h.indexOf('tipo'), pts: h.findIndex(x => x.startsWith('punto')), cob: h.findIndex(x => x.startsWith('cobrad')), nota: h.findIndex(x => x.startsWith('nota')) }; }
+      else modo = 'params';
+      continue;
+    }
+    if (modo === 'params') params[(c[0] || '').toLowerCase()] = c[1];
+    else filas.push({ i, id: c[cols.id] || '', tipo: normTipo(c[cols.tipo]) || c[cols.tipo] || '', puntos: num(c[cols.pts]), cobrado: cols.cob >= 0 && /^s[ií]/i.test(c[cols.cob] || ''), nota: cols.nota >= 0 ? (c[cols.nota] || '') : '' });
+  }
+  const param = k => { const e = Object.entries(params).find(([n]) => n.includes(k)); return e ? num(e[1]) : 0; };
+  const totales = Object.fromEntries(TIPOS_PUNTOS.map(t => [t, 0]));
+  for (const f of filas) if (totales[f.tipo] !== undefined) totales[f.tipo] += f.puntos;
+  const porCobrar = filas.filter(f => f.tipo === 'Extra' && !f.cobrado).reduce((a, f) => a + f.puntos, 0);
+  const desde = ((Object.entries(params).find(([n]) => n.includes('desde')) || [])[1] || '').trim();
+  const crudo = ((Object.entries(params).find(([n]) => n.includes('valor')) || [])[1] || '').trim();
+  const valorPropio = !!crudo && !/tim[oó]n|base/i.test(crudo) && num(crudo) > 0;
+  return { file, lines, filas, contratados: param('contratad'), bolsa: param('cortes'), valor: valorPropio ? num(crudo) : cobroBase().valorPunto, valorPropio, totales, porCobrar, desde };
+}
+function resumenPuntos(p) {
+  const P = parsePuntos(p);
+  if (!P) return null;
+  const cl = parseChangelog(p), ie = colIndex(cl.headers, 'estado', 5), idd = (i => i >= 0 ? i : 4)(cl.headers.findIndex(x => /descrip|solicitud/i.test(x))), ifc = colIndex(cl.headers, 'fecha', 1);
+  const clasificados = new Set(P.filas.map(f => f.id));
+  // «Registrar desde»: lo anterior a esa fecha no se pide clasificar (proyectos que arrancaron el registro en cero)
+  const sinPuntos = cl.rows
+    .filter(r => r.cells[0] && !clasificados.has(r.cells[0]) && !(r.cells[ie] || '').includes('🚫') && !(P.desde && (r.cells[ifc] || '') < P.desde))
+    .map(r => ({ id: r.cells[0], descripcion: (r.cells[idd] || '').slice(0, 160) }));
+  return {
+    file: path.basename(P.file), desde: P.desde, contratados: P.contratados, bolsa: P.bolsa, valor: P.valor, valorPropio: P.valorPropio, totales: P.totales, porCobrar: P.porCobrar,
+    filas: P.filas.map(({ i, ...f }) => f), sinPuntos,
+  };
+}
+const PLANTILLA_PUNTOS = (cod, c, b, v, desde = '') => `# Puntos · ${cod}
+
+Registro de puntos por solicitud. Lo lee el Panel Timón (pestaña Puntos).
+Tipos: **Contratado** (dentro de la cotización) · **Garantía** (corrige algo entregado, no se cobra) · **Cortesía** (sale de la bolsa de regalo) · **Extra** (fuera de alcance, se cobra).
+Los puntos se cuentan con el catálogo del skill cotizar-proyecto.
+
+| Parámetro | Valor |
+|---|---:|
+| Puntos contratados | ${c} |
+| Bolsa de cortesía | ${b} |
+| Valor del punto | ${v} |${desde ? `\n| Registrar desde | ${desde} |` : ''}
+
+| ID | Tipo | Puntos | Cobrado | Nota |
+|---|---|---:|---|---|
+`;
+function crearPuntos(p, { contratados, bolsa, valor }) {
+  if (puntosDe(p)) throw new Error('Este proyecto ya tiene su registro de puntos');
+  const c = num(contratados);
+  if (contratados === undefined || String(contratados).trim() === '') throw new Error('Faltan los puntos contratados (puede ser 0)');
+  const b = num(bolsa) || Math.round(c * cobroBase().bolsaPct / 100), v = num(valor) > 0 ? num(valor) : 'Timón';
+  const file = path.join(p.ruta, `PUNTOS-${p.codigo}.md`);
+  fs.writeFileSync(file, PLANTILLA_PUNTOS(p.codigo, c, b, v));
+  return path.basename(file);
+}
+function guardarFilaPuntos(p, { id, tipo, puntos, nota, cobrado }) {
+  const P = parsePuntos(p);
+  if (!P) throw new Error('Este proyecto no tiene PUNTOS-*.md');
+  const t = normTipo(tipo);
+  if (!t) throw new Error('Tipo inválido: usa Contratado, Garantía, Cortesía, Extra, Iguala o Por decidir');
+  if (!id) throw new Error('Falta el ID');
+  const limpio = v => String(v ?? '').replace(/\|/g, '/').replace(/\n/g, ' ').trim();
+  const prev = P.filas.find(f => f.id === id);
+  const cob = t !== 'Extra' ? '' : (cobrado === undefined ? (prev && prev.cobrado ? 'sí' : '') : (cobrado ? 'sí' : ''));
+  const fila = `| ${limpio(id)} | ${t} | ${num(puntos)} | ${cob} | ${limpio(nota === undefined && prev ? prev.nota : nota)} |`;
+  if (prev) P.lines[prev.i] = fila;
+  else {
+    let after = -1;
+    for (let i = 0; i < P.lines.length; i++) if (P.lines[i].trim().startsWith('|')) after = i;
+    if (after === -1) throw new Error('El registro de puntos no tiene tabla');
+    P.lines.splice(after + 1, 0, fila);
+  }
+  fs.writeFileSync(P.file, P.lines.join('\n'));
+}
+
+// ---------- versión de Timón ----------
+const VERSION_TIMON = () => { const f = RUTA_TIMON && path.join(RUTA_TIMON, 'VERSION'); return (f && (leer(f) || '').trim()) || ''; };
+const desactualizado = p => { const v = VERSION_TIMON(); return !!(v && p.tmn && String(p.timonVersion || '') < v); };
+const HOY_ISO = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const sinBarras = v => String(v ?? '').replace(/\|/g, '/').replace(/\r?\n/g, ' ').trim();
+
+// ---------- etapas del proyecto (ficha .tmn) ----------
+const ETAPAS = ['brief', 'descubrimiento', 'cotizacion', 'aceptado', 'construccion', 'entregado', 'mantenimiento'];
+function escribirTmnCrudo(p, cambios) {
+  const t = leerTmn(p.ruta);
+  const datos = { ...((t && !t.error && t.datos) || (typeof sugerirTmn === 'function' ? sugerirTmn(p) : {})), ...cambios };
+  fs.writeFileSync((t && t.file) || path.join(p.ruta, 'proyecto.tmn'), JSON.stringify(datos, null, 2) + '\n');
+}
+
+// ---------- verificar ----------
+function archivosMd(p) {
+  const out = [];
+  for (const d of ['.', 'specs', 'checklists']) {
+    try { for (const f of fs.readdirSync(path.join(p.ruta, d))) if (/\.md$/i.test(f) && !/^readme\.md$/i.test(f) && !/\.bak/i.test(f)) out.push(d === '.' ? f : d + '/' + f); } catch { }
+  }
+  return out;
+}
+const claveIdTexto = (p, id) => { const k = claveId(id); return k ? `${p.codigo}-${k.n.padStart(3, '0')}` : null; };
+const claveId = id => { const m = String(id).match(/^([A-Za-z0-9_]+)-(\d+)/); return m ? { cod: m[1].toUpperCase(), n: m[2] } : null; };
+function archivosDeId(lista, id) {
+  const k = claveId(id);
+  if (!k) return { checklists: [], specs: [] };
+  const re = new RegExp('(^|[^0-9])' + k.n + '([^0-9]|$)');
+  const de = lista.filter(f => { const b = path.basename(f).toUpperCase(), i = b.indexOf(k.cod + '-'); return i >= 0 && re.test(b.slice(i + k.cod.length + 1)); });
+  const chk = de.filter(f => f.startsWith('checklists/') || /check/i.test(path.basename(f)));
+  return { checklists: chk.sort((a, b) => (b.startsWith('checklists/') - a.startsWith('checklists/'))), specs: de.filter(f => f.startsWith('specs/') && !/check/i.test(path.basename(f))) };
+}
+const RE_ITEM = /^(\s*)(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s?(.*)$/;
+function leerChecklist(p, file) {
+  const lines = (leer(path.join(p.ruta, file)) || '').split('\n');
+  const items = []; let cur = null, seccion = '';
+  lines.forEach((l, i) => {
+    const m = l.match(RE_ITEM);
+    if (m) { cur = { linea: i, hecho: m[2] !== ' ', texto: m[3].trim(), detalle: [], seccion }; items.push(cur); return; }
+    if (/^#{1,4}\s/.test(l)) { seccion = l.replace(/^#+\s*/, '').trim(); cur = null; return; }
+    if (cur && /^\s{2,}\S/.test(l)) cur.detalle.push(l.trim().replace(/^[-*]\s+/, ''));
+    else if (cur && l.trim() !== '') cur = null;
+  });
+  return { file, items };
+}
+function porVerificar(p, conItems = true) {
+  const cl = parseChangelog(p);
+  if (!cl.file) return [];
+  const ie = colIndex(cl.headers, 'estado', 5), idd = (i => i >= 0 ? i : 4)(cl.headers.findIndex(x => /descrip|solicitud/i.test(x))), ifc = colIndex(cl.headers, 'fecha', 1), iv = colIndex(cl.headers, 'verificaci', 7), im = cl.headers.findIndex(x => /m[óo]dulo/i.test(x));
+  const lista = archivosMd(p);
+  const sqls = conItems ? listaSql(p) : [];
+  return cl.rows.filter(r => (r.cells[ie] || '').includes('✅')).map(r => {
+    const a = archivosDeId(lista, r.cells[0]);
+    let checklists = a.checklists.map(f => leerChecklist(p, f)).filter(c => c.items.length);
+    if (!checklists.length) checklists = a.specs.map(f => leerChecklist(p, f)).filter(c => c.items.length); // criterios de aceptación con casillas dentro del spec
+    const items = checklists.flatMap(c => c.items);
+    return {
+      id: r.cells[0], fecha: r.cells[ifc] || '', modulo: (((r.cells[idd] || '').match(/^\s*\*\*(.+?):?\*\*/) || [])[1] || (im >= 0 && r.cells[im]) || ((r.cells[idd] || '').match(/\*\*(.+?)\*\*/) || [0, (r.cells[idd] || '').split(/[.:(]/)[0]])[1]).replace(/:$/, '').slice(0, 160), area: im >= 0 ? r.cells[im] || '' : '', descripcion: (r.cells[idd] || '').slice(0, 700), nota: r.cells[iv] || '',
+      specs: a.specs, checklists: conItems ? checklists : [], sqlPendientes: sqls.filter(s => s.id === claveIdTexto(p, r.cells[0]) && !s.produccion).map(s => s.rel), total: items.length, hechos: items.filter(x => x.hecho).length,
+    };
+  });
+}
+function marcarItem(p, file, linea, hecho) {
+  const full = /\.md$/i.test(file || '') && dentro(p.ruta, file);
+  if (!full || !fs.existsSync(full)) throw new Error('No encontré ese checklist');
+  const lines = (leer(full) || '').split('\n'), l = lines[+linea];
+  if (l === undefined || !RE_ITEM.test(l)) throw new Error('El checklist cambió en el disco; recarga la página');
+  lines[+linea] = l.replace(/\[([ xX])\]/, hecho ? '[x]' : '[ ]');
+  fs.writeFileSync(full, lines.join('\n'));
+}
+function cerrarSpec(p, file, id) {
+  const full = dentro(p.ruta, file);
+  if (!full || !fs.existsSync(full)) return false;
+  let s = leer(full) || '';
+  const linea = `Cerrado, verificado el ${HOY_ISO()}, ver ${id}`;
+  if (/##\s*Estado\s*\r?\n/i.test(s)) s = s.replace(/(##\s*Estado\s*\r?\n+)[^\n]*/i, `$1${linea}`);
+  else s = s.replace(/\s*$/, '') + `\n\n## Estado\n${linea}\n`;
+  fs.writeFileSync(full, s);
+  return true;
+}
+function cerrarVerificacion(p, id, { nota, forzar } = {}) {
+  const it = porVerificar(p).find(x => x.id === id);
+  if (!it) throw new Error('Esa solicitud ya no está como ✅ Construido');
+  if (it.total && it.hechos < it.total && !forzar) throw new Error(`Faltan ${it.total - it.hechos} punto(s) del checklist`);
+  actualizarEstado(p, id, '✔️ Verificado', (nota ? sinBarras(nota) + ' · ' : '') + `verificado en el panel el ${HOY_ISO()}`, true);
+  return { specs: it.specs.filter(f => cerrarSpec(p, f, id)) };
+}
+function reportarFallo(p, id, nota) {
+  if (!String(nota || '').trim()) throw new Error('Escribe qué falló');
+  actualizarEstado(p, id, '✅ Construido', `Falló el ${HOY_ISO()}: ${sinBarras(nota)}`, true);
+}
+
+// ---------- cobranza (COBROS-[CODIGO].md) ----------
+const cobrosDe = p => archivoRaiz(p.ruta, /^COBROS-[^.]+\.md$/i);
+function parseCobros(p) {
+  const file = cobrosDe(p);
+  if (!file) return null;
+  const lines = (leer(file) || '').split('\n');
+  const params = {}, filas = [];
+  let modo = null, cols = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l.startsWith('|')) { modo = null; continue; }
+    if (/^[-:\s|]+$/.test(l)) continue;
+    const c = l.split('|').slice(1, -1).map(x => x.trim());
+    if (!modo) {
+      const h = c.map(x => x.toLowerCase());
+      if (h.includes('concepto')) { modo = 'pagos'; cols = { fecha: h.indexOf('fecha'), concepto: h.indexOf('concepto'), monto: h.findIndex(x => x.startsWith('monto')), estado: h.indexOf('estado'), nota: h.findIndex(x => x.startsWith('nota')) }; }
+      else modo = 'params';
+      continue;
+    }
+    if (modo === 'params') params[(c[0] || '').toLowerCase()] = c[1];
+    else filas.push({ i, fecha: cols.fecha >= 0 ? (c[cols.fecha] || '') : '', concepto: c[cols.concepto] || '', monto: num(c[cols.monto]), pagado: /pagad|cobrad/i.test(c[cols.estado] || ''), nota: cols.nota >= 0 ? (c[cols.nota] || '') : '' });
+  }
+  const param = k => { const e = Object.entries(params).find(([n]) => n.includes(k)); return e ? num(e[1]) : 0; };
+  return { file, lines, filas, contratado: param('contratad'), iguala: param('iguala mensual'), igualaPuntos: param('puntos de iguala') };
+}
+function resumenCobros(p) {
+  const C = parseCobros(p), P = resumenPuntos(p);
+  if (!C) return P && P.porCobrar ? { file: null, contratado: 0, cobrado: 0, pendiente: 0, vencido: 0, sinProgramar: 0, porCobrar: 0, extras: Math.round(P.porCobrar * P.valor), proximo: null, iguala: 0, igualaPuntos: 0, igualaUsados: 0, filas: [] } : null;
+  const hoy = HOY_ISO(), f = C.filas;
+  const suma = arr => arr.reduce((a, x) => a + x.monto, 0);
+  const cobrado = suma(f.filter(x => x.pagado)), pendiente = suma(f.filter(x => !x.pagado));
+  const vencido = suma(f.filter(x => !x.pagado && /^\d{4}-\d{2}-\d{2}/.test(x.fecha) && x.fecha < hoy));
+  const proximo = f.filter(x => !x.pagado && /^\d{4}-\d{2}-\d{2}/.test(x.fecha) && x.fecha >= hoy).sort((a, b) => a.fecha.localeCompare(b.fecha))[0] || null;
+  const sinProgramar = Math.max(0, C.contratado - cobrado - pendiente);
+  let igualaUsados = 0;
+  if (C.igualaPuntos && P) {
+    const cl = parseChangelog(p), ifc = colIndex(cl.headers, 'fecha', 1), mes = hoy.slice(0, 7);
+    const fechas = new Map(cl.rows.map(r => [r.cells[0], r.cells[ifc] || '']));
+    for (const x of P.filas) if (x.tipo !== 'Garantía' && (fechas.get(x.id) || '').startsWith(mes)) igualaUsados += x.puntos;
+  }
+  return {
+    file: path.basename(C.file), contratado: C.contratado, cobrado, pendiente, vencido, sinProgramar, porCobrar: pendiente + sinProgramar,
+    extras: P ? Math.round(P.porCobrar * P.valor) : 0, proximo: proximo ? { fecha: proximo.fecha, concepto: proximo.concepto, monto: proximo.monto } : null,
+    iguala: C.iguala, igualaPuntos: C.igualaPuntos, igualaUsados, filas: f.map(({ i, ...x }) => x),
+  };
+}
+const PLANTILLA_COBROS = (cod, c, ig, igp) => `# Cobranza · ${cod}
+
+Pagos del proyecto. Lo lee el Panel Timón (pestaña Cobranza y la vista global de Cobranza).
+Estado: **Pagado** o **Pendiente**. Un pendiente con fecha pasada aparece como vencido. Fechas en formato AAAA-MM-DD.
+
+| Parámetro | Valor |
+|---|---:|
+| Total contratado | ${c} |
+| Iguala mensual | ${ig} |
+| Puntos de iguala por mes | ${igp} |
+
+| Fecha | Concepto | Monto | Estado | Nota |
+|---|---|---:|---|---|
+`;
+function crearCobros(p, { contratado, iguala, igualaPuntos }) {
+  if (cobrosDe(p)) throw new Error('Este proyecto ya tiene su registro de cobranza');
+  const file = path.join(p.ruta, `COBROS-${p.codigo}.md`);
+  fs.writeFileSync(file, PLANTILLA_COBROS(p.codigo, num(contratado), num(iguala), num(igualaPuntos)));
+  return path.basename(file);
+}
+function guardarCobro(p, { indice, fecha, concepto, monto, pagado, nota }) {
+  const C = parseCobros(p);
+  if (!C) throw new Error('Este proyecto no tiene COBROS-*.md');
+  const prev = indice === undefined || indice === null || indice === '' ? null : C.filas[+indice];
+  if (prev === undefined) throw new Error('Ese pago ya no existe; recarga');
+  const v = (x, d) => x === undefined ? d : x;
+  const f = String(v(fecha, prev ? prev.fecha : '')).trim();
+  if (f && !/^\d{4}-\d{2}-\d{2}$/.test(f)) throw new Error('La fecha va como AAAA-MM-DD');
+  const con = sinBarras(v(concepto, prev ? prev.concepto : ''));
+  if (!con) throw new Error('Falta el concepto');
+  const fila = `| ${f} | ${con} | ${num(v(monto, prev ? prev.monto : 0))} | ${v(pagado, prev ? prev.pagado : false) ? 'Pagado' : 'Pendiente'} | ${sinBarras(v(nota, prev ? prev.nota : ''))} |`;
+  if (prev) C.lines[prev.i] = fila;
+  else {
+    let after = -1;
+    for (let i = 0; i < C.lines.length; i++) if (C.lines[i].trim().startsWith('|')) after = i;
+    C.lines.splice(after + 1, 0, fila);
+  }
+  fs.writeFileSync(C.file, C.lines.join('\n'));
+  if (v(pagado, prev ? prev.pagado : false)) cobrarCorte(p, con);
+}
+
+// ---------- proyecto nuevo de punta a punta ----------
+function crearProyectoNuevo(b) {
+  const padre = abs(b.padre || '');
+  const enRaiz = (CONFIG_BASE.carpetasProyectos || []).map(abs).some(r => padre === r || padre.startsWith(r + path.sep));
+  if (!fs.existsSync(padre) && enRaiz) fs.mkdirSync(padre, { recursive: true });
+  if (!fs.existsSync(padre) || !fs.statSync(padre).isDirectory()) throw new Error('La carpeta donde se crea no existe');
+  const nombre = String(b.nombre || '').trim();
+  if (!nombre) throw new Error('Falta el nombre del proyecto');
+  const dir = path.join(padre, String(b.carpeta || nombre).trim().replace(/[\/\\:]/g, '-'));
+  if (fs.existsSync(dir) && fs.readdirSync(dir).filter(x => x !== '.DS_Store').length) throw new Error('Ya existe una carpeta con ese nombre y no está vacía');
+  const r = incorporarProyecto(dir, b.codigo);
+  const brief = String(b.brief || '').trim();
+  fs.writeFileSync(path.join(dir, 'proyecto.tmn'), JSON.stringify({
+    timon: 1, nombre, codigo: r.codigo, cliente: String(b.cliente || '').trim(), marca: String(b.marca || '').trim(),
+    estado: 'activo', etapa: 'brief', color: '', descripcion: brief.replace(/\s+/g, ' ').slice(0, 220),
+    lanzadores: [], ligas: [], relacionados: [], timonVersion: VERSION_TIMON(),
+  }, null, 2) + '\n');
+  if (brief) {
+    const inbox = archivoRaiz(dir, /^INBOX-[^.]+\.md$/i) || path.join(dir, `INBOX-${r.codigo}.md`);
+    fs.appendFileSync(inbox, `\n## ${HOY_ISO()} · Brief inicial (Panel)\n\n${brief}\n\n_Sin procesar._\n`);
+  }
+  descubrir();
+  const pr = PROYECTOS.find(x => x.ruta === dir);
+  return { id: pr ? pr.id : null, ruta: dir, codigo: r.codigo };
+}
+
+// ---------- specs / docs / sql ----------
+function listaSpecs(p) {
+  const dir = path.join(p.ruta, 'specs'); const out = [];
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.md') || f.toLowerCase() === 'readme.md') continue;
+      const full = path.join(dir, f); if (!fs.statSync(full).isFile()) continue;
+      const m = (leer(full) || '').match(/##\s*Estado\s*\r?\n+\s*([^\n]+)/i);
+      out.push({ file: 'specs/' + f, nombre: f.replace(/\.md$/, ''), estado: m ? m[1].trim() : '—', mtime: fs.statSync(full).mtimeMs });
+    }
+  } catch { }
+  return out.sort((a, b) => b.mtime - a.mtime);
+}
+const PLANTILLA_SPEC = n => `# Spec: ${n}
+
+**Dónde:** COD › /pagina › Sección · **Tipo:** Nueva función | Mejora | Arreglo | Cambio | Soporte | Interno
+
+## Lo que se pidió
+[en palabras de quien lo pidió, tal cual]
+
+## Objetivo
+[1-2 líneas: qué problema resuelve]
+
+## Alcance
+- Incluye: ...
+- No incluye (fuera de alcance): ...
+
+## Contexto / arquitectura relevante
+[tablas, módulos, o flujos que toca]
+
+## Migraciones
+[archivos SQL con el ID en el nombre, o "ninguna"]
+
+## Criterios de aceptación (verificables sin leer código — máximo 7)
+- [ ] Cuando hago X, veo Y
+- [ ] ...
+
+## Restricciones
+[stack, convenciones, límites conocidos]
+
+## Lo que se hizo
+[lo escribe la IA al construir: qué cambió, archivos tocados, decisiones y lo que quedó fuera]
+
+## Estado
+Abierto
+`;
+function listaDocs(p) {
+  const out = [];
+  try { for (const f of fs.readdirSync(p.ruta)) if (f.endsWith('.md') && fs.statSync(path.join(p.ruta, f)).isFile()) out.push(f); } catch { }
+  const orden = ['00-MARCO.md', '01-ARQUITECTURA.md'];
+  return out.sort((a, b) => ((orden.indexOf(a) + 1 || 99) - (orden.indexOf(b) + 1 || 99)) || a.localeCompare(b));
+}
+const LEDGER = path.join(SCRIPT_DIR, 'sql-aplicados.json');
+const leerLedger = () => { try { return JSON.parse(fs.readFileSync(LEDGER, 'utf8')); } catch { return {}; } };
+function listaSql(p) {
+  const out = [], reg = leerSqlReg(p).archivos, vistos = new Set();
+  const walk = (dir, rel, d) => {
+    if (d > 4) return;
+    let es; try { es = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      const full = path.join(dir, e.name), r = (rel + '/' + e.name).replace(/^\//, '');
+      if (e.isDirectory()) walk(full, r, d + 1);
+      else if (e.name.endsWith('.sql') && !vistos.has(r)) { vistos.add(r); const g = reg[r] || {}; out.push({ rel: r, mtime: fs.statSync(full).mtimeMs, id: idDeArchivo(p, e.name), desarrollo: g.desarrollo || null, produccion: g.produccion || null, aplicado: g.produccion || null }); }
+    }
+  };
+  const principal = rutaSqlDe(p);
+  for (const c of [principal, ...(p.cfg.carpetasSql || DEFAULTS.carpetasSql)].filter((c, i, a) => a.indexOf(c) === i)) walk(path.join(p.ruta, c), c, 0);
+  for (const d of ['', 'specs', 'docs']) { try { for (const f of fs.readdirSync(path.join(p.ruta, d))) if (f.endsWith('.sql')) walk(path.join(p.ruta, d), d, 4); } catch { } } // sueltos (hasta que se ordenen)
+  return out.sort((a, b) => (!a.id - !b.id) || String(a.id || '').localeCompare(String(b.id || ''), 'es', { numeric: true }) || b.mtime - a.mtime);
+}
+
+// ---------- estructura fija, salud y ordenar (TMN-015, TMN-016) ----------
+// Regla 20: specs/  checklists/  sql/ (o la carpeta de migraciones del proyecto)  docs/  .timon/
+const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function idDeArchivo(p, nombre) {
+  const m = String(nombre).match(new RegExp('(?:^|[^A-Za-z0-9])' + escRe(p.codigo) + '[-_ ]?(\\d{1,4})(?!\\d)', 'i'));
+  return m ? `${p.codigo}-${m[1].padStart(3, '0')}` : null;
+}
+const cuentaSql = dir => { let n = 0; const w = (d, k) => { if (k > 3) return; let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { if (e.isDirectory()) { if (e.name !== 'node_modules') w(path.join(d, e.name), k + 1); } else if (e.name.endsWith('.sql')) n++; } }; w(dir, 0); return n; };
+function rutaSqlDe(p) {
+  if (p.tmn && p.tmn.rutaSql) return String(p.tmn.rutaSql).replace(/^\.?\/+|\/+$/g, '');
+  const cands = ['sql', ...(p.cfg.carpetasSql || DEFAULTS.carpetasSql).filter(c => c !== 'sql')];
+  let mejor = null, max = 0;
+  for (const c of cands) { const n = cuentaSql(path.join(p.ruta, c)); if (n > max) { max = n; mejor = c; } }
+  if (mejor) return mejor;
+  return fs.existsSync(path.join(p.ruta, 'supabase')) ? 'supabase/migrations' : 'sql';
+}
+function diagnosticoOrden(p) {
+  const rutaSql = rutaSqlDe(p), mover = [];
+  const ocupado = new Set();
+  const revisar = relDir => {
+    let es = []; try { es = fs.readdirSync(path.join(p.ruta, relDir), { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      if (!e.isFile()) continue;
+      const rel = relDir ? relDir + '/' + e.name : e.name;
+      let destDir = null, tipo = null;
+      if (/\.md$/i.test(e.name) && /check/i.test(e.name) && !/^readme/i.test(e.name)) { destDir = 'checklists'; tipo = 'checklist'; }
+      else if (/\.sql$/i.test(e.name)) { destDir = rutaSql; tipo = 'sql'; }
+      if (!destDir || relDir === destDir) continue;
+      const destino = destDir + '/' + e.name;
+      const conflicto = fs.existsSync(path.join(p.ruta, destino)) || ocupado.has(destino);
+      ocupado.add(destino);
+      mover.push({ tipo, desde: rel, a: destino, id: idDeArchivo(p, e.name), conflicto });
+    }
+  };
+  // solo donde suelen quedar sueltos: la raíz, specs/ y docs/ (sin entrar a subcarpetas)
+  for (const d of ['', 'specs', 'docs']) revisar(d);
+  const enRaiz = mover;
+  const otrasSql = (p.cfg.carpetasSql || DEFAULTS.carpetasSql).concat(['migrations', 'db']).filter((c, i, a) => a.indexOf(c) === i && c !== rutaSql)
+    .map(c => ({ carpeta: c, n: cuentaSql(path.join(p.ruta, c)) })).filter(x => x.n);
+  return { rutaSql, mover: enRaiz, otrasSql };
+}
+function saludProyecto(p) {
+  const d = diagnosticoOrden(p);
+  const ver = porVerificar(p, false);
+  const pts = resumenPuntos(p);
+  const sql = listaSql(p);
+  const lanz = (p.tmn && Array.isArray(p.tmn.lanzadores)) ? p.tmn.lanzadores.length : 0;
+  return {
+    rutaSql: d.rutaSql, fuera: d.mover.length, otrasSql: d.otrasSql,
+    sinChecklist: ver.filter(x => !x.total).map(x => x.id),
+    sinPuntos: pts ? pts.sinPuntos.length : null,
+    sqlSinProduccion: sql.filter(s => !s.produccion).length,
+    sinLanzador: !lanz,
+  };
+}
+function ordenarProyecto(p, desdeLista) {
+  const d = diagnosticoOrden(p), elegidos = new Set(desdeLista || []);
+  const hechos = [];
+  const reg = leerSqlReg(p);
+  for (const m of d.mover) {
+    if (!elegidos.has(m.desde) || m.conflicto) continue;
+    const de = dentro(p.ruta, m.desde), a = dentro(p.ruta, m.a);
+    if (!de || !a || !fs.existsSync(de) || fs.existsSync(a)) continue;
+    fs.mkdirSync(path.dirname(a), { recursive: true });
+    fs.renameSync(de, a);
+    if (reg.archivos[m.desde]) { reg.archivos[m.a] = reg.archivos[m.desde]; delete reg.archivos[m.desde]; }
+    hechos.push(m);
+  }
+  if (!hechos.length) return { movidos: 0, referencias: 0 };
+  guardarSqlReg(p, reg);
+  // referencias: changelog, specs, checklists y docs que mencionaban la ruta vieja
+  let referencias = 0;
+  const textos = [];
+  for (const dir of ['', 'specs', 'checklists', 'docs']) {
+    try { for (const f of fs.readdirSync(path.join(p.ruta, dir))) if (/\.md$/i.test(f)) textos.push(path.join(p.ruta, dir, f)); } catch { }
+  }
+  for (const f of textos) {
+    let t = leer(f); if (t === null) continue;
+    const antes = t;
+    for (const m of hechos) {
+      if (m.desde.includes('/')) t = t.split(m.desde).join(m.a);
+      else t = t.replace(new RegExp('(^|[\\s\x60(\\[])(?:\\./)?' + escRe(m.desde) + '(?=[\\s\x60)\\]]|$)', 'gm'), (x, pre) => pre + m.a);
+    }
+    if (t !== antes) { fs.writeFileSync(f, t); referencias++; }
+  }
+  // bitácora para poder deshacer a mano
+  const dirLog = path.join(p.ruta, '.timon', 'orden');
+  fs.mkdirSync(dirLog, { recursive: true });
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-');
+  fs.writeFileSync(path.join(dirLog, `${stamp}.md`), `# Ordenar · ${p.codigo} · ${stamp}\n\n| Antes | Después |\n|---|---|\n` + hechos.map(m => `| ${m.desde} | ${m.a} |`).join('\n') + `\n\nReferencias actualizadas en ${referencias} archivo(s).\n`);
+  return { movidos: hechos.length, referencias };
+}
+
+// ---------- registro de SQL dentro del proyecto (TMN-017) ----------
+const ENTORNOS_SQL = ['desarrollo', 'produccion'];
+const sqlRegDe = p => path.join(p.ruta, '.timon', 'sql.json');
+function leerSqlReg(p) {
+  let r = null; try { r = JSON.parse(fs.readFileSync(sqlRegDe(p), 'utf8')); } catch { }
+  if (r && r.archivos) return r;
+  // primera vez: se trae lo que el panel guardaba en su propia carpeta (contaba como aplicado en producción)
+  const viejo = leerLedger()[p.ruta] || {};
+  r = { version: 1, archivos: {} };
+  for (const [rel, f] of Object.entries(viejo)) r.archivos[rel] = { produccion: f };
+  if (Object.keys(viejo).length) guardarSqlReg(p, r);
+  return r;
+}
+function guardarSqlReg(p, r) {
+  fs.mkdirSync(path.dirname(sqlRegDe(p)), { recursive: true });
+  fs.writeFileSync(sqlRegDe(p), JSON.stringify(r, null, 2) + '\n');
+}
+function marcarSqlEntorno(p, rel, entorno, aplicado) {
+  if (!ENTORNOS_SQL.includes(entorno)) throw new Error('Entorno desconocido');
+  const r = leerSqlReg(p);
+  const e = r.archivos[rel] = r.archivos[rel] || {};
+  if (aplicado) e[entorno] = HOY_ISO(); else delete e[entorno];
+  if (!Object.keys(e).length) delete r.archivos[rel];
+  guardarSqlReg(p, r);
+}
+
+// ---------- Fase 2: tipo y dónde, mapa, montos, etapas planeadas e historial (TMN-031, 032, 033, 039) ----------
+const TIPOS_SOL = ['Nueva función', 'Mejora', 'Arreglo', 'Cambio', 'Soporte', 'Interno'];
+const idxCol = (h, re) => h.findIndex(x => re.test(String(x).trim()));
+// Agrega las columnas Tipo y Dónde al final de la tabla si no están (las filas viejas quedan con esas celdas vacías).
+function asegurarColumnas(p) {
+  const cl = parseChangelog(p);
+  if (!cl.file) throw new Error('Este proyecto no tiene changelog');
+  const falta = [];
+  if (idxCol(cl.headers, /^tipo$/i) < 0) falta.push('Tipo');
+  if (idxCol(cl.headers, /^d[oó]nde$/i) < 0) falta.push('Dónde');
+  if (!falta.length) return false;
+  let hi = -1;
+  for (let i = 0; i < cl.lines.length; i++) if (cl.lines[i].trim().startsWith('|')) { hi = i; break; }
+  const todas = [...cl.headers, ...falta];
+  cl.lines[hi] = '| ' + todas.join(' | ') + ' |';
+  if (cl.lines[hi + 1] && /^[-:\s|]+$/.test(cl.lines[hi + 1].trim())) cl.lines[hi + 1] = '|' + todas.map(() => '---').join('|') + '|';
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+  return true;
+}
+function ponerCelda(p, id, col, valor) {
+  asegurarColumnas(p);
+  const cl = parseChangelog(p);
+  const row = cl.rows.find(r => r.cells[0] === id);
+  if (!row) throw new Error(`No encontré la fila ${id}`);
+  const i = col === 'tipo' ? idxCol(cl.headers, /^tipo$/i) : idxCol(cl.headers, /^d[oó]nde$/i);
+  if (i < 0) throw new Error('No encontré la columna');
+  if (col === 'tipo' && valor && !TIPOS_SOL.includes(valor)) throw new Error('Tipo desconocido');
+  while (row.cells.length < cl.headers.length) row.cells.push('');
+  row.cells[i] = sinBarras(valor);
+  cl.lines[row.i] = '| ' + row.cells.join(' | ') + ' |';
+  fs.writeFileSync(cl.file, cl.lines.join('\n'));
+}
+
+// MAPA-[COD].md: una fila por lugar. Código | Módulo | Página | Sección | Nota
+const mapaDe = p => archivoRaiz(p.ruta, /^MAPA-[^.]+\.md$/i);
+const PLANTILLA_MAPA = cod => `# Mapa · ${cod}
+
+Las partes del proyecto, de lo general a lo particular: **Módulo** (con su código corto) › **Página** (la ruta, como \`/rentas\`) › **Sección** (una parte de la página, como la tabla).
+Lo lee el Panel Timón (Mapa y Configuración) y la IA al registrar piezas: la columna **Dónde** del changelog se escribe con estos nombres, por ejemplo \`REN › /rentas › Tabla\`.
+Una fila por lugar. Una fila sin página es el módulo; una fila sin sección es la página.
+
+| Código | Módulo | Página | Sección | Nota |
+|---|---|---|---|---|
+`;
+function parseMapa(p) {
+  const file = mapaDe(p);
+  if (!file) return { file: null, lugares: [] };
+  const lugares = [];
+  let enTabla = false;
+  for (const l of (leer(file) || '').split('\n').map(x => x.trim())) {
+    if (!l.startsWith('|')) { enTabla = false; continue; }
+    if (/^[-:\s|]+$/.test(l)) continue;
+    const c = l.split('|').slice(1, -1).map(x => x.trim());
+    if (!enTabla) { enTabla = /c[oó]digo/i.test(c[0] || ''); continue; }
+    if (!c[0] && !c[1]) continue;
+    lugares.push({ cod: (c[0] || '').toUpperCase(), modulo: c[1] || '', pagina: c[2] || '', seccion: c[3] || '', nota: c[4] || '' });
+  }
+  return { file, lugares };
+}
+function guardarMapa(p, lugares) {
+  const file = mapaDe(p) || path.join(p.ruta, `MAPA-${p.codigo}.md`);
+  const previo = leer(file) || PLANTILLA_MAPA(p.codigo);
+  const ini = previo.search(/^\|\s*C[oó]digo\s*\|/mi);
+  const cabeza = ini >= 0 ? previo.slice(0, ini) : previo.replace(/\s*$/, '\n\n');
+  const limpio = (Array.isArray(lugares) ? lugares : []).map(x => ({ cod: sinBarras(x.cod).toUpperCase(), modulo: sinBarras(x.modulo), pagina: sinBarras(x.pagina), seccion: sinBarras(x.seccion), nota: sinBarras(x.nota) }))
+    .filter(x => x.cod || x.modulo);
+  const tabla = '| Código | Módulo | Página | Sección | Nota |\n|---|---|---|---|---|\n' + limpio.map(x => `| ${x.cod} | ${x.modulo} | ${x.pagina} | ${x.seccion} | ${x.nota} |`).join('\n') + (limpio.length ? '\n' : '');
+  fs.writeFileSync(file, cabeza + tabla);
+  return path.basename(file);
+}
+
+// Montos: viven en los parámetros de PUNTOS- y COBROS- (ahí los leen Puntos y Cobro). Configuración los edita.
+function ponerParam(file, nombre, valor) {
+  const lines = (leer(file) || '').split('\n');
+  let ultima = -1, cabeza = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l.startsWith('|')) { if (cabeza >= 0) break; continue; }
+    if (cabeza < 0) { if (/par[aá]metro/i.test(l)) cabeza = i; continue; }
+    if (/^[-:\s|]+$/.test(l)) { if (ultima < 0) ultima = i; continue; }
+    ultima = i;
+    const c = l.split('|').slice(1, -1).map(x => x.trim());
+    if ((c[0] || '').toLowerCase() === nombre.toLowerCase()) { lines[i] = `| ${c[0]} | ${valor} |`; fs.writeFileSync(file, lines.join('\n')); return; }
+  }
+  if (cabeza < 0) throw new Error('No encontré la tabla de parámetros en ' + path.basename(file));
+  lines.splice((ultima >= 0 ? ultima : cabeza) + 1, 0, `| ${nombre} | ${valor} |`);
+  fs.writeFileSync(file, lines.join('\n'));
+}
+function guardarMontos(p, b) {
+  const n = k => (b[k] === undefined || b[k] === null || String(b[k]).trim() === '' ? null : num(b[k]));
+  if (!puntosDe(p)) crearPuntos(p, { contratados: n('contratados') ?? 0, bolsa: n('bolsa') ?? 0, valor: n('valor') ?? 0 });
+  if (!cobrosDe(p)) crearCobros(p, { contratado: n('totalContratado') ?? 0, iguala: n('iguala') ?? 0, igualaPuntos: n('igualaPuntos') ?? 0 });
+  const fp = puntosDe(p), fc = cobrosDe(p);
+  ponerParam(fp, 'Valor del punto', n('valor') ? n('valor') : 'Timón'); // vacío = usa la base de Timón
+  if (n('contratados') !== null) ponerParam(fp, 'Puntos contratados', n('contratados'));
+  if (n('bolsa') !== null) ponerParam(fp, 'Bolsa de cortesía', n('bolsa'));
+  const desde = String(b.desde || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(desde)) ponerParam(fp, 'Registrar desde', desde);
+  if (n('totalContratado') !== null) ponerParam(fc, 'Total contratado', n('totalContratado'));
+  if (n('iguala') !== null) ponerParam(fc, 'Iguala mensual', n('iguala'));
+  if (n('igualaPuntos') !== null) ponerParam(fc, 'Puntos de iguala por mes', n('igualaPuntos'));
+}
+function guardarEtapasPlan(p, plan) {
+  const limpio = {}, ok = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+  for (const e of ETAPAS) {
+    const x = (plan || {})[e] || {};
+    if (ok(x.inicio) || ok(x.fin)) limpio[e] = { inicio: ok(x.inicio), fin: ok(x.fin) };
+  }
+  escribirTmnCrudo(p, { etapasPlan: limpio });
+}
+
+// Historial con fechas (TMN-039): .timon/historial.json. Se compara contra la última foto (.timon/estados.json),
+// así quedan registrados también los cambios que la IA hace directo en el changelog o en la ficha.
+const histDe = p => path.join(p.ruta, '.timon', 'historial.json');
+const fotoDe = p => path.join(p.ruta, '.timon', 'estados.json');
+const leerJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
+function sincronizarHistorial(p) {
+  try {
+    const cl = parseChangelog(p);
+    if (!cl.file && !p.etapa) return;
+    const iE = colIndex(cl.headers, 'estado', 5), iF = colIndex(cl.headers, 'fecha', 1);
+    const ahora = { etapa: p.etapa || '', piezas: {} };
+    for (const r of cl.rows) if (/^[A-Za-z0-9_]+-\d+/.test(r.cells[0] || '')) ahora.piezas[r.cells[0]] = r.cells[iE] || '';
+    const foto = leerJson(fotoDe(p), null);
+    const eventos = [], ts = new Date().toISOString();
+    if (!foto) {
+      // primera vez: se reconstruye aproximado con la fecha de registro de cada pieza
+      for (const r of cl.rows) if (ahora.piezas[r.cells[0]] !== undefined)
+        eventos.push({ f: /^\d{4}-\d{2}-\d{2}/.test(r.cells[iF] || '') ? r.cells[iF].slice(0, 10) : HOY_ISO(), tipo: 'pieza', id: r.cells[0], de: null, a: ahora.piezas[r.cells[0]], aprox: true });
+      if (ahora.etapa) eventos.push({ f: HOY_ISO(), tipo: 'etapa', de: null, a: ahora.etapa, aprox: true });
+    } else {
+      if ((foto.etapa || '') !== ahora.etapa) eventos.push({ f: ts, tipo: 'etapa', de: foto.etapa || null, a: ahora.etapa });
+      for (const [id, e] of Object.entries(ahora.piezas)) {
+        const antes = (foto.piezas || {})[id];
+        if (antes !== e) eventos.push({ f: ts, tipo: 'pieza', id, de: antes === undefined ? null : antes, a: e });
+      }
+    }
+    if (!foto || eventos.length) {
+      fs.mkdirSync(path.join(p.ruta, '.timon'), { recursive: true });
+      if (eventos.length) fs.writeFileSync(histDe(p), JSON.stringify([...leerJson(histDe(p), []), ...eventos], null, 1));
+      fs.writeFileSync(fotoDe(p), JSON.stringify(ahora));
+    }
+  } catch { }
+}
+
+// ---------- Fase 3: la pieza como expediente, comentarios y checklist (TMN-034, TMN-035, TMN-022, TMN-041) ----------
+const SEC_COMENTARIOS = 'Comentarios de Yanga';
+// Texto de una sección "## Nombre" de un markdown (hasta la siguiente ## o el final)
+function seccionMd(txt, re) {
+  const L = String(txt || '').split('\n'); let dentro = false; const out = [];
+  for (const l of L) {
+    if (/^##\s/.test(l)) { if (dentro) break; dentro = re.test(l.replace(/^##\s*/, '').trim()); continue; }
+    if (dentro) out.push(l);
+  }
+  return out.join('\n').trim();
+}
+// Comentarios: "- 🟠 **Abierto** · AAAA-MM-DD · texto"  /  "- ✅ **Atendido** · AAAA-MM-DD · texto"
+function leerComentarios(p, rel) {
+  const full = rel && dentro(p.ruta, rel);
+  if (!full || !fs.existsSync(full)) return [];
+  const L = (leer(full) || '').split('\n'); const out = []; let en = false;
+  L.forEach((l, i) => {
+    if (/^##\s/.test(l)) { en = new RegExp(SEC_COMENTARIOS, 'i').test(l); return; }
+    if (!en) return;
+    const m = l.match(/^\s*[-*]\s+(?:🟠|✅)?\s*\*\*(Abierto|Atendido)\*\*\s*·\s*(\d{4}-\d{2}-\d{2})\s*·\s*(?:Sobre «([^»]*)»\s*·\s*)?(.*)$/);
+    if (m) out.push({ archivo: rel, linea: i, atendido: m[1] === 'Atendido', fecha: m[2], sobre: (m[3] || '').trim(), texto: m[4].trim() });
+  });
+  return out;
+}
+function agregarComentario(p, rel, texto, sobre) {
+  const t = String(texto || '').replace(/\r?\n+/g, ' ').trim();
+  const sb = String(sobre || '').replace(/[«»\r\n]+/g, ' ').trim().slice(0, 140);
+  if (!t) throw new Error('Escribe el comentario');
+  const full = /\.md$/i.test(rel || '') && dentro(p.ruta, rel);
+  if (!full || !fs.existsSync(full)) throw new Error('No encontré ese archivo');
+  let s = (leer(full) || '').replace(/\s*$/, '');
+  const linea = `- 🟠 **Abierto** · ${HOY_ISO()} · ${sb ? `Sobre «${sb}» · ` : ''}${t}`;
+  const re = new RegExp('^##\\s*' + SEC_COMENTARIOS + '.*$', 'mi');
+  if (re.test(s)) {
+    const L = s.split('\n'); let i = L.findIndex(l => re.test(l)); let fin = i + 1;
+    while (fin < L.length && !/^##\s/.test(L[fin])) fin++;
+    let ult = fin - 1; while (ult > i && L[ult].trim() === '') ult--;
+    L.splice(ult + 1, 0, linea); s = L.join('\n');
+  } else {
+    // va antes de "## Estado" si existe (para que el estado siga al final), si no al final
+    const iEst = s.search(/^##\s*Estado\s*$/mi);
+    const bloque = `## ${SEC_COMENTARIOS}\n\nLo que anotó Yanga al revisar. La IA los lee antes de tocar esta pieza y los marca como Atendido.\n\n${linea}\n`;
+    s = iEst >= 0 ? s.slice(0, iEst) + bloque + '\n' + s.slice(iEst) : s + '\n\n' + bloque;
+  }
+  fs.writeFileSync(full, s.replace(/\s*$/, '\n'));
+}
+function marcarComentario(p, rel, linea, atendido) {
+  const full = dentro(p.ruta, rel || '');
+  if (!full || !fs.existsSync(full)) throw new Error('No encontré ese archivo');
+  const L = (leer(full) || '').split('\n'), l = L[+linea];
+  if (!l || !/\*\*(Abierto|Atendido)\*\*/.test(l)) throw new Error('El archivo cambió en el disco; recarga');
+  L[+linea] = l.replace(/(?:🟠|✅)?\s*\*\*(Abierto|Atendido)\*\*/, atendido ? '✅ **Atendido**' : '🟠 **Abierto**');
+  fs.writeFileSync(full, L.join('\n'));
+}
+// Checklist nuevo desde la plantilla; si el spec trae criterios con casillas, se copian como pasos
+function crearChecklist(p, id) {
+  const lista = archivosMd(p), a = archivosDeId(lista, id);
+  if (a.checklists.length) return a.checklists[0];
+  const rel = `checklists/${id}-checklist.md`, full = path.join(p.ruta, rel);
+  const spec = a.specs[0] ? leer(path.join(p.ruta, a.specs[0])) || '' : '';
+  const pasos = spec.split('\n').filter(l => RE_ITEM.test(l)).map(l => l.replace(/\[[xX]\]/, '[ ]'));
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, `# Checklist ${id}\n\nSe prueba en la app, sin leer código. Si un paso pide ejecutar un SQL, escribe el nombre del archivo (\`${id}-algo.sql\`) y el panel lo abre a un lado.\n\n## Pasos\n${pasos.length ? pasos.join('\n') : '- [ ] Cuando hago X, veo Y\n- [ ] ...'}\n`);
+  return rel;
+}
+function expedientePieza(p, id) {
+  const cl = parseChangelog(p);
+  const row = cl.rows.find(r => r.cells[0] === id);
+  if (!row) throw new Error(`No encontré ${id} en el changelog`);
+  const H = cl.headers, c = row.cells, col = re => { const i = idxCol(H, re); return i >= 0 ? (c[i] || '') : ''; };
+  const raro = c.length > H.length;
+  const lista = archivosMd(p), a = archivosDeId(lista, id);
+  const specRel = a.specs[0] || null, spec = specRel ? leer(path.join(p.ruta, specRel)) || '' : '';
+  let checklists = a.checklists.map(f => leerChecklist(p, f)).filter(x => x.items.length);
+  const enSpec = !checklists.length && specRel ? [leerChecklist(p, specRel)].filter(x => x.items.length) : [];
+  const P = resumenPuntos(p), fp = P ? P.filas.find(f => f.id === id) : null;
+  const k = claveIdTexto(p, id);
+  return {
+    id, fecha: col(/^fecha/i), quien: col(/qui[eé]n/i), modulo: col(/m[oó]dulo|[aá]rea/i), descripcion: col(/descrip|solicitud/i),
+    estado: col(/^estado/i), verificacion: col(/verificaci/i), tipo: raro ? '' : col(/^tipo$/i), donde: raro ? '' : col(/^d[oó]nde$/i),
+    spec: specRel ? { file: specRel, contenido: spec, hecho: seccionMd(spec, /lo que se hizo/i), pedido: seccionMd(spec, /lo que se pidi/i), estado: seccionMd(spec, /^estado$/i) } : null,
+    specs: a.specs, checklistFiles: a.checklists,
+    checklists: checklists.length ? checklists : enSpec, checklistEnSpec: !checklists.length && !!enSpec.length,
+    sql: listaSql(p).filter(s => s.id === k),
+    puntos: fp ? { tipo: fp.tipo, puntos: fp.puntos, cobrado: fp.cobrado, nota: fp.nota, valor: P.valor } : null, valorPunto: P ? P.valor : null,
+    historial: leerJson(histDe(p), []).filter(e => e.id === id),
+    comentarios: [...(specRel ? leerComentarios(p, specRel) : []), ...a.checklists.flatMap(f => leerComentarios(p, f))],
+  };
+}
+
+// ---------- Fase 4: Por decidir y corte de cobro (TMN-019, TMN-020) ----------
+// Lo que la IA o tú registraron y todavía no tiene decisión de cobro.
+function sugerenciaCobro(tipo, conIguala) {
+  return ({ 'Arreglo': { d: 'Garantia', t: 'Garantía: algo entregado no funciona como se acordó' },
+    'Cambio': { d: 'Cobrar', t: 'Cobrar: el cliente cambió de idea sobre algo hecho' },
+    'Soporte': conIguala ? { d: 'Iguala', t: 'Iguala: operación del mes' } : { d: 'Cobrar', t: 'Cobrar: no hay iguala' },
+    'Nueva función': { d: '', t: 'Dentro del contrato si está en la cotización; si no, cobrar' },
+    'Mejora': { d: '', t: 'Tú decides: cobrar o regalar' } })[tipo] || { d: '', t: '' };
+}
+function porDecidir(p) {
+  const P = resumenPuntos(p); if (!P) return [];
+  const cl = parseChangelog(p), H = cl.headers;
+  const iT = idxCol(H, /^tipo$/i), iD = idxCol(H, /^d[oó]nde$/i), iE = colIndex(H, 'estado', 5);
+  const C = parseCobros(p), conIguala = !!(C && C.iguala);
+  const filas = new Map(cl.rows.map(r => [r.cells[0], r.cells]));
+  const idd = (i => i >= 0 ? i : 4)(idxCol(H, /descrip|solicitud/i));
+  const pendientes = P.filas.filter(f => f.tipo === 'Por decidir').map(f => ({ id: f.id, descripcion: ((filas.get(f.id) || [])[idd] || '').slice(0, 160), puntos: f.puntos }));
+  const vistos = new Set();
+  return [...pendientes, ...P.sinPuntos.map(x => ({ ...x, puntos: null }))].filter(x => !vistos.has(x.id) && vistos.add(x.id)).map(x => {
+    const c = filas.get(x.id) || [], raro = c.length > H.length, tipo = !raro && iT >= 0 ? (c[iT] || '') : '';
+    return { id: x.id, descripcion: x.descripcion, puntos: x.puntos, tipo, donde: !raro && iD >= 0 ? (c[iD] || '') : '', estado: c[iE] || '', sugerencia: sugerenciaCobro(tipo, conIguala) };
+  }).filter(x => x.tipo !== 'Interno');
+}
+const DECISIONES = { Cobrar: 'Extra', Regalar: 'Cortesía', Garantia: 'Garantía', Contrato: 'Contratado', Iguala: 'Iguala' };
+function decidirCobro(p, { id, decision, puntos, pct }) {
+  if (!id) throw new Error('Falta el ID');
+  if (decision !== 'Parcial' && !DECISIONES[decision]) throw new Error('Decisión desconocida');
+  const pts = num(puntos);
+  if (puntos === undefined || puntos === null || String(puntos).trim() === '' || pts < 0) throw new Error('Escribe los puntos de la pieza (pueden ser 0)');
+  if (!puntosDe(p)) crearPuntos(p, { contratados: 0, bolsa: 0, valor: 0 });
+  const P = parsePuntos(p);
+  const quitar = new Set(P.filas.filter(f => f.id === id).map(f => f.i));
+  const lines = P.lines.filter((_, i) => !quitar.has(i));
+  const nota = `Decidido el ${HOY_ISO()}`;
+  let nuevas;
+  if (decision === 'Parcial') {
+    const q = Math.min(100, Math.max(0, num(pct) || 50)), cobra = Math.round(pts * q / 100 * 10) / 10, regala = Math.round((pts - cobra) * 10) / 10;
+    nuevas = [`| ${id} | Extra | ${cobra} |  | ${nota} · parcial: se cobra el ${q}% |`, `| ${id} | Cortesía | ${regala} |  | ${nota} · parcial: se regala el ${100 - q}% |`];
+  } else nuevas = [`| ${id} | ${DECISIONES[decision]} | ${pts} |  | ${nota} |`];
+  let after = -1;
+  for (let i = 0; i < lines.length; i++) if (lines[i].trim().startsWith('|')) after = i;
+  if (after === -1) throw new Error('El registro de puntos no tiene tabla');
+  lines.splice(after + 1, 0, ...nuevas);
+  fs.writeFileSync(P.file, lines.join('\n'));
+}
+// Corte: los extras sin cobrar (y lo regalado en el mes, con su valor) en un documento, y un pago pendiente en COBROS.
+const cortesDir = p => path.join(p.ruta, 'docs', 'cortes');
+function listaCortes(p) {
+  try { return fs.readdirSync(cortesDir(p)).filter(f => /^CORTE-.+\.md$/i.test(f)).sort().reverse().map(f => ({ file: 'docs/cortes/' + f, mes: (f.match(/(\d{4}-\d{2})\.md$/) || [])[1] || '' })); } catch { return []; }
+}
+function generarCorte(p, { mes }) {
+  const m = /^\d{4}-\d{2}$/.test(String(mes || '')) ? mes : HOY_ISO().slice(0, 7);
+  const P = parsePuntos(p); if (!P) throw new Error('Este proyecto no tiene registro de puntos');
+  if (!cobrosDe(p)) throw new Error('Primero crea el registro de Cobro (total contratado)');
+  const extras = P.filas.filter(f => f.tipo === 'Extra' && !f.cobrado && !/Corte \d{4}-\d{2}/.test(f.nota));
+  const regalos = P.filas.filter(f => f.tipo === 'Cortesía' && f.nota.includes('Decidido el ' + m));
+  if (!extras.length && !regalos.length) throw new Error('No hay extras por cobrar ni cortesías de ese mes');
+  const cl = parseChangelog(p), idd = (i => i >= 0 ? i : 4)(idxCol(cl.headers, /descrip|solicitud/i));
+  const desc = new Map(cl.rows.map(r => [r.cells[0], ((r.cells[idd] || '').match(/\*\*([^*]+)\*\*/) || [0, (r.cells[idd] || '').slice(0, 90)])[1].replace(/:$/, '')]));
+  const $ = n => '$' + Math.round(n).toLocaleString('es-MX');
+  const totE = extras.reduce((a, f) => a + f.puntos, 0) * P.valor, totR = regalos.reduce((a, f) => a + f.puntos, 0) * P.valor;
+  const rel = `docs/cortes/CORTE-${p.codigo}-${m}.md`, full = path.join(p.ruta, rel);
+  if (fs.existsSync(full)) throw new Error(`Ya existe ${rel}; ábrelo en Archivos o borra ese archivo para rehacerlo`);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, `# Corte de cobro · ${p.nombre} · ${m}\n\nValor del punto: ${$(P.valor)}. Generado el ${HOY_ISO()} desde Timón.\n\n## Se cobra\n\n| Pieza | Qué | Puntos | Monto |\n|---|---|---:|---:|\n${extras.map(f => `| ${f.id} | ${sinBarras(desc.get(f.id) || '')} | ${f.puntos} | ${$(f.puntos * P.valor)} |`).join('\n') || '| — | Nada por cobrar este mes | 0 | $0 |'}\n| **Total** | | **${extras.reduce((a, f) => a + f.puntos, 0)}** | **${$(totE)}** |\n\n## Se regaló (para que lo veas)\n\n| Pieza | Qué | Puntos | Valor |\n|---|---|---:|---:|\n${regalos.map(f => `| ${f.id} | ${sinBarras(desc.get(f.id) || '')} | ${f.puntos} | ${$(f.puntos * P.valor)} |`).join('\n') || '| — | Nada regalado este mes | 0 | $0 |'}\n| **Total** | | **${regalos.reduce((a, f) => a + f.puntos, 0)}** | **${$(totR)}** |\n`);
+  // marca los extras como incluidos en este corte (para no cobrarlos dos veces)
+  const lines = P.lines.slice();
+  for (const f of extras) lines[f.i] = lines[f.i].replace(/\|\s*([^|]*)\|\s*$/, (_, n) => `| ${(n.trim() ? n.trim() + ' · ' : '')}Corte ${m} |`);
+  fs.writeFileSync(P.file, lines.join('\n'));
+  if (totE > 0) guardarCobro(p, { fecha: HOY_ISO(), concepto: `Corte ${m}`, monto: Math.round(totE), pagado: false, nota: rel });
+  return { file: rel, extras: extras.length, cobrar: Math.round(totE), regalado: Math.round(totR) };
+}
+// Al marcar pagado un "Corte AAAA-MM", sus extras quedan como cobrados.
+function cobrarCorte(p, concepto) {
+  const m = (String(concepto || '').match(/^Corte (\d{4}-\d{2})/) || [])[1]; if (!m) return;
+  const P = parsePuntos(p); if (!P) return;
+  const lines = P.lines.slice(); let n = 0;
+  for (const f of P.filas) if (f.tipo === 'Extra' && !f.cobrado && f.nota.includes('Corte ' + m)) {
+    const c = celdasFila(lines[f.i]); if (c.length < 5) continue; c[3] = 'sí'; lines[f.i] = '| ' + c.join(' | ') + ' |'; n++;
+  }
+  if (n) fs.writeFileSync(P.file, lines.join('\n'));
+}
+
+// ---------- Cotizar mientras se trabaja y proyectos para cotizar (TMN-043, TMN-044) ----------
+const ETAPAS_COTIZA = ['brief', 'descubrimiento', 'cotizacion'];
+const enCotizacion = p => ETAPAS_COTIZA.includes(p.etapa || '');
+// Resumen de la cotización en curso: todas las piezas vivas con sus puntos, por módulo
+function cotizacionEnCurso(p) {
+  const P = parsePuntos(p), cl = parseChangelog(p), H = cl.headers;
+  const iE = colIndex(H, 'estado', 5), iD = idxCol(H, /^d[oó]nde$/i), idd = (i => i >= 0 ? i : 4)(idxCol(H, /descrip|solicitud/i));
+  const pts = new Map(); if (P) for (const f of P.filas) pts.set(f.id, (pts.get(f.id) || 0) + f.puntos);
+  const piezas = cl.rows.filter(r => /^[A-Za-z0-9_]+-\d+/.test(r.cells[0] || '') && !(r.cells[iE] || '').includes('🚫'))
+    .map(r => ({ id: r.cells[0], titulo: ((r.cells[idd] || '').match(/\*\*([^*]+)\*\*/) || [0, (r.cells[idd] || '').slice(0, 90)])[1].replace(/:$/, ''), donde: iD >= 0 && r.cells.length <= H.length ? (r.cells[iD] || '') : '', puntos: pts.has(r.cells[0]) ? pts.get(r.cells[0]) : null }));
+  const total = piezas.reduce((a, x) => a + (x.puntos || 0), 0), valor = P ? P.valor : cobroBase().valorPunto;
+  return { etapa: p.etapa, piezas, total, valor, monto: Math.round(total * valor), sinPuntos: piezas.filter(x => x.puntos === null).length };
+}
+function generarCotizacion(p) {
+  const c = cotizacionEnCurso(p);
+  if (!c.piezas.length) throw new Error('Todavía no hay piezas registradas');
+  const mapa = parseMapa(p).lugares, mod = d => { const t = String(d || '').split(/\s*›\s*/)[0]; const m = mapa.find(l => l.cod.toUpperCase() === t.toUpperCase() || l.modulo.toLowerCase() === t.toLowerCase()); return m ? `${m.cod} · ${m.modulo}` : (t || 'Sin módulo'); };
+  const grupos = {}; for (const x of c.piezas) (grupos[mod(x.donde)] = grupos[mod(x.donde)] || []).push(x);
+  const $ = n => '$' + Math.round(n).toLocaleString('es-MX');
+  let md = `# Cotización · ${p.nombre}\n\nGenerada el ${HOY_ISO()} desde Timón con las piezas registradas. Valor del punto: ${$(c.valor)}.\n\n`;
+  for (const [g, xs] of Object.entries(grupos)) {
+    const s = xs.reduce((a, x) => a + (x.puntos || 0), 0);
+    md += `## ${g}\n\n| Pieza | Qué | Puntos | Monto |\n|---|---|---:|---:|\n${xs.map(x => `| ${x.id} | ${sinBarras(x.titulo)} | ${x.puntos === null ? 'sin contar' : x.puntos} | ${x.puntos === null ? '—' : $(x.puntos * c.valor)} |`).join('\n')}\n| **Subtotal** | | **${s}** | **${$(s * c.valor)}** |\n\n`;
+  }
+  md += `## Total\n\n**${c.total} puntos · ${$(c.monto)}**${c.sinPuntos ? `\n\nFaltan ${c.sinPuntos} pieza(s) por contar: el total puede subir.` : ''}\n\nPara la versión que se manda al cliente (plan de pagos, tiempos, alcance), pide en Claude "arma la cotización con el skill cotizar-proyecto" sobre este documento.\n`;
+  const rel = `docs/cotizaciones/COTIZACION-${p.codigo}-${HOY_ISO()}.md`;
+  fs.mkdirSync(path.join(p.ruta, path.dirname(rel)), { recursive: true });
+  fs.writeFileSync(path.join(p.ruta, rel), md);
+  return { file: rel, total: c.total, monto: c.monto };
+}
+// Aceptar: lo que estaba por decidir pasa a Contratado, los puntos contratados y el total van a Cobro, y la etapa a Aceptado
+function aceptarCotizacion(p) {
+  const c = cotizacionEnCurso(p);
+  if (!puntosDe(p)) crearPuntos(p, { contratados: 0, bolsa: 0, valor: 0 });
+  let P = parsePuntos(p); const lines = P.lines.slice();
+  for (const f of P.filas) if (f.tipo === 'Por decidir') { const cc = celdasFila(lines[f.i]); cc[1] = 'Contratado'; lines[f.i] = '| ' + cc.join(' | ') + ' |'; }
+  fs.writeFileSync(P.file, lines.join('\n'));
+  P = parsePuntos(p);
+  const contratados = P.filas.filter(f => f.tipo === 'Contratado').reduce((a, f) => a + f.puntos, 0);
+  ponerParam(P.file, 'Puntos contratados', contratados);
+  ponerParam(P.file, 'Bolsa de cortesía', Math.round(contratados * cobroBase().bolsaPct / 100));
+  ponerParam(P.file, 'Registrar desde', HOY_ISO());
+  if (!cobrosDe(p)) crearCobros(p, { contratado: 0, iguala: 0, igualaPuntos: 0 });
+  ponerParam(cobrosDe(p), 'Total contratado', Math.round(contratados * P.valor));
+  escribirTmnCrudo(p, { etapa: 'aceptado' });
+  return { contratados, monto: Math.round(contratados * P.valor), sinContar: c.sinPuntos };
+}
+
+// ---------- correr proyectos (uno por proyecto, simultáneos) ----------
+const corriendo = new Map(); // "id#n" -> {proc, buf, seq, exit}  (n = número de lanzador)
+const claveRun = (id, n) => `${id}#${+n || 0}`;
+function estadoRun(id) {
+  const prefijo = id.includes('#') ? null : id + '#';
+  if (!prefijo) { const r = corriendo.get(id); return { corriendo: !!(r && r.proc), exit: r ? r.exit : null }; }
+  let algo = false; for (const [k, r] of corriendo) if (k.startsWith(prefijo) && r.proc) algo = true;
+  return { corriendo: algo, exit: null };
+}
+const estadoLanzadores = p => lanzadoresDe(p).map((l, n) => ({ ...l, ...estadoRun(claveRun(p.id, n)) }));
+// Los chunks pueden partir una línea a la mitad: se guarda el resto hasta que llegue su \n.
+function pushLog(r, chunk, { fin = false } = {}) {
+  const partes = ((r.resto || '') + chunk.toString().replace(/\x1b\[[0-9;]*m/g, '')).split('\n');
+  r.resto = fin ? '' : partes.pop();
+  if (fin && partes.length && partes[partes.length - 1] === '') partes.pop();
+  for (const line of partes) {
+    if (line.trim() === '' && r.buf.length && r.buf[r.buf.length - 1].t.trim() === '') continue;
+    r.buf.push({ i: r.seq++, t: line });
+  }
+  if (fin && r.resto) { r.buf.push({ i: r.seq++, t: r.resto }); r.resto = ''; }
+  if (r.buf.length > 1200) r.buf = r.buf.slice(-1000);
+}
+function runStart(p, n = 0) {
+  const clave = claveRun(p.id, n);
+  const prev = corriendo.get(clave);
+  if (prev && prev.proc) return { ok: false, error: 'Ese lanzador ya está corriendo' };
+  p.cfg = cargarConfig(p.ruta); // relee config y .tmn por si los editaste con el panel abierto
+  const t = leerTmn(p.ruta); if (t && !t.error) p.tmn = t.datos;
+  const l = lanzadoresDe(p)[+n || 0];
+  if (!l) return { ok: false, error: 'Ese lanzador no existe' };
+  const r = { proc: null, buf: [], seq: 0, exit: null, resto: '' };
+  corriendo.set(clave, r);
+  const cmd = l.comando;
+  pushLog(r, `$ ${cmd}\n`);
+  r.proc = spawn(cmd, {
+    cwd: path.resolve(p.ruta, l.carpeta || '.'), shell: process.env.SHELL || true,
+    detached: process.platform !== 'win32', env: { ...process.env, FORCE_COLOR: '0' },
+  });
+  r.proc.stdout.on('data', c => pushLog(r, c));
+  r.proc.stderr.on('data', c => pushLog(r, c));
+  r.proc.on('exit', (code, sig) => { r.exit = { code, sig }; pushLog(r, `\n[proceso terminó — código ${code ?? sig}]\n`, { fin: true }); r.proc = null; });
+  r.proc.on('error', e => { pushLog(r, `\n[error al arrancar: ${e.message}]\n`); r.proc = null; });
+  return { ok: true };
+}
+function runStop(p, n = 0) {
+  const r = corriendo.get(claveRun(p.id, n));
+  if (!r || !r.proc) return { ok: false, error: 'No está corriendo' };
+  const pr = r.proc;
+  try { process.kill(-pr.pid, 'SIGTERM'); } catch { try { pr.kill('SIGTERM'); } catch { } }
+  setTimeout(() => { if (!r.proc) return; try { process.kill(-pr.pid, 'SIGKILL'); } catch { try { pr.kill('SIGKILL'); } catch { } } }, 3500);
+  return { ok: true };
+}
+
+// ---------- resúmenes ----------
+function alertasDe(p) {
+  const cl = parseChangelog(p);
+  const i = colIndex(cl.headers, 'estado', 5);
+  const cuenta = s => cl.rows.filter(r => (r.cells[i] || '').includes(s)).length;
+  const inbox = inboxDe(p), cont = inbox ? leer(inbox) : null;
+  return {
+    pendientes: cuenta('🔲'), enConstruccion: cuenta('🔄'), construidosSinVerificar: cuenta('✅'),
+    verificados: cuenta('✔️'), descartados: cuenta('🚫'),
+    inboxSinProcesar: cont ? (cont.match(/_?Sin procesar\.?_?/gi) || []).length : 0,
+    specsAbiertos: listaSpecs(p).filter(s => !/cerrado/i.test(s.estado)).length,
+    sqlPendientes: listaSql(p).filter(s => !s.produccion).length,
+    cobros: (() => { const c = resumenCobros(p); return c ? { porCobrar: c.porCobrar, vencido: c.vencido, cobrado: c.cobrado, extras: c.extras } : null; })(),
+    puntos: (() => { const P = resumenPuntos(p); return P ? {
+      porCobrarMxn: Math.round(P.porCobrar * P.valor),
+      cortesiaRestante: Math.round(P.bolsa - P.totales['Cortesía']),
+      contratadoPct: P.contratados ? Math.round(P.totales.Contratado / P.contratados * 100) : 0,
+      sinClasificar: P.sinPuntos.length,
+    } : null; })(),
+  };
+}
+const resumenGeneral = () => PROYECTOS.map(p => ({
+  id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta,
+  cliente: p.cliente, marca: p.marca, estado: p.estado, color: p.color, descripcion: p.descripcion,
+  tieneTmn: !!p.tmn, tmnError: p.tmnError, lanzadores: estadoLanzadores(p),
+  etapa: p.etapa, timonVersion: p.timonVersion, desactualizado: desactualizado(p),
+  alertas: alertasDe(p), corriendo: estadoRun(p.id).corriendo, tieneChangelog: !!changelogDe(p),
+}));
+function estadoProyecto(p) {
+  sincronizarHistorial(p);
+  const cl = parseChangelog(p);
+  const inbox = inboxDe(p);
+  return {
+    proyecto: { id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta, cliente: p.cliente, marca: p.marca, estado: p.estado, color: p.color, descripcion: p.descripcion },
+    tmn: p.tmn, tmnFile: p.tmnFile ? path.basename(p.tmnFile) : null, tmnError: p.tmnError,
+    etapa: p.etapa, timonVersion: p.timonVersion, version: VERSION_TIMON(), desactualizado: desactualizado(p), cobros: resumenCobros(p),
+    lanzadores: estadoLanzadores(p),
+    relacionados: ((p.tmn && p.tmn.relacionados) || []).map(c => { const r = PROYECTOS.find(x => x.codigo === c); return { codigo: c, id: r ? r.id : null, nombre: r ? r.nombre : c }; }),
+    changelog: cl.file ? { file: path.basename(cl.file), headers: cl.headers, rows: cl.rows.map(r => r.cells), iEstado: colIndex(cl.headers, 'estado', 5), iTipo: idxCol(cl.headers, /^tipo$/i), iDonde: idxCol(cl.headers, /^d[oó]nde$/i), iDesc: (i => i >= 0 ? i : 4)(idxCol(cl.headers, /descrip|solicitud/i)), iFecha: colIndex(cl.headers, 'fecha', 1) } : null,
+    mapa: (() => { const m = parseMapa(p); return { file: m.file ? path.basename(m.file) : null, lugares: m.lugares }; })(),
+    porDecidir: (() => { try { return porDecidir(p); } catch { return []; } })(), cortes: listaCortes(p),
+    cobroBase: cobroBase(), cotizacion: enCotizacion(p) ? cotizacionEnCurso(p) : null, cotizaciones: (() => { try { return fs.readdirSync(path.join(p.ruta, 'docs', 'cotizaciones')).filter(f => f.endsWith('.md')).sort().reverse().map(f => 'docs/cotizaciones/' + f); } catch { return []; } })(),
+    tiposSolicitud: TIPOS_SOL, etapasPlan: (p.tmn && p.tmn.etapasPlan) || {}, etapas: ETAPAS,
+    cobrosParam: (() => { const c = parseCobros(p); return c ? { contratado: c.contratado, iguala: c.iguala, igualaPuntos: c.igualaPuntos } : null; })(),
+    inbox: inbox ? { file: path.basename(inbox), contenido: leer(inbox) } : null,
+    specs: listaSpecs(p), docs: listaDocs(p), sql: listaSql(p), rutaSql: rutaSqlDe(p), salud: (() => { try { return saludProyecto(p); } catch { return null; } })(),
+    run: { ...estadoRun(p.id), comando: lanzadoresDe(p)[0].comando },
+    alertas: alertasDe(p),
+    puntos: resumenPuntos(p),
+  };
+}
+
+// ---------- gestión de proyectos ----------
+function agregarProyecto(ruta) {
+  const d = abs(ruta);
+  if (!fs.existsSync(d)) throw new Error('Esa carpeta no existe');
+  if (!fs.statSync(d).isDirectory()) throw new Error('Eso no es una carpeta');
+  if (!esProyecto(d)) {
+    if (!MODO_CENTRAL) throw new Error('Esa carpeta no es un proyecto Timón todavía — usa "Incorporar a Timón"');
+    const tmp = { ruta: d, cfg: cargarConfig(d), codigo: path.basename(d).replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase(), nombre: path.basename(d) };
+    fs.writeFileSync(path.join(d, 'proyecto.tmn'), JSON.stringify(sugerirTmn(tmp), null, 2) + '\n');
+  }
+  const lista = new Set((CONFIG_BASE.proyectos || []).map(abs));
+  lista.add(d);
+  CONFIG_BASE.proyectos = [...lista];
+  CONFIG_BASE.ocultos = (CONFIG_BASE.ocultos || []).map(abs).filter(x => x !== d);
+  guardarConfigBase(); descubrir();
+  return d;
+}
+function quitarProyecto(ruta) {
+  const d = abs(ruta);
+  CONFIG_BASE.proyectos = (CONFIG_BASE.proyectos || []).map(abs).filter(x => x !== d);
+  const oc = new Set((CONFIG_BASE.ocultos || []).map(abs));
+  oc.add(d); // por si lo encuentra la búsqueda automática
+  CONFIG_BASE.ocultos = [...oc];
+  guardarConfigBase(); descubrir();
+}
+function incorporarProyecto(ruta, codigo) {
+  const plantilla = plantillaDir();
+  if (!plantilla) throw new Error('No sé dónde está Timón — configúralo primero en la pestaña Timón');
+  const d = abs(ruta);
+  const cod = String(codigo || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!cod) throw new Error('Falta el código del proyecto (3-5 letras, ej. RB, IDEA)');
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  if (!fs.statSync(d).isDirectory()) throw new Error('Eso no es una carpeta');
+  if (esProyecto(d)) throw new Error('Esa carpeta ya es un proyecto Timón — usa "Agregar existente"');
+
+  const copiados = [];
+  const copiar = (origen, destino) => {
+    for (const e of fs.readdirSync(origen, { withFileTypes: true })) {
+      if (e.name === 'panel' || e.name === '.DS_Store') continue;       // el panel es central
+      const o = path.join(origen, e.name);
+      let nombre = e.name.replace(/\[CODIGO\]/g, cod);
+      const dst = path.join(destino, nombre);
+      if (e.isDirectory()) { fs.mkdirSync(dst, { recursive: true }); copiar(o, dst); continue; }
+      if (fs.existsSync(dst)) continue;                                  // nunca pisa lo que ya existe
+      let contenido = leer(o);
+      if (contenido !== null && /\.(md|json)$/i.test(nombre)) contenido = contenido.replace(/\[CODIGO\]/g, cod);
+      fs.writeFileSync(dst, contenido ?? fs.readFileSync(o));
+      copiados.push(path.relative(d, dst));
+    }
+  };
+  copiar(plantilla, d);
+  agregarProyecto(d);
+  return { ruta: d, codigo: cod, archivos: copiados.length };
+}
+
+// ---------- correr el actualizador de Timón ----------
+let act = { corriendo: false, buf: [], seq: 0, fin: null };
+function actualizarTimon(rutas, dry) {
+  if (act.corriendo) return { ok: false, error: 'Ya hay una actualización en curso' };
+  if (!RUTA_TIMON) return { ok: false, error: 'No sé dónde está Timón — configúralo en la pestaña Timón' };
+  const script = path.join(RUTA_TIMON, 'actualizar-timon.mjs');
+  if (!fs.existsSync(script)) return { ok: false, error: `No encontré actualizar-timon.mjs en ${RUTA_TIMON}` };
+  if (!rutas.length) return { ok: false, error: 'No hay proyectos que actualizar' };
+
+  act = { corriendo: true, buf: [], seq: 0, fin: null, resto: '' };
+  const args = [script, ...(dry ? ['--dry'] : []), ...rutas];
+  const push = (ch, o) => pushLog(act, ch, o);
+  push(`$ node actualizar-timon.mjs ${dry ? '--dry ' : ''}${rutas.length} proyecto(s)\n`);
+  const pr = spawn(process.execPath, args, { cwd: RUTA_TIMON });
+  pr.stdout.on('data', push); pr.stderr.on('data', push);
+  pr.on('exit', code => { act.corriendo = false; act.fin = { code, dry }; push(`\n[terminó — código ${code}]\n`, { fin: true }); descubrir(); });
+  pr.on('error', e => { act.corriendo = false; act.fin = { code: -1 }; push(`\n[error: ${e.message}]\n`, { fin: true }); });
+  return { ok: true };
+}
+
+// ---------- explorador de carpetas (para elegir sin escribir rutas) ----------
+function explorar(dir) {
+  const d = dir ? abs(dir) : os.homedir();
+  if (!fs.existsSync(d) || !fs.statSync(d).isDirectory()) throw new Error('No existe esa carpeta');
+  const carpetas = [];
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.startsWith('.') || IGNORAR.has(e.name)) continue;
+    const full = path.join(d, e.name);
+    carpetas.push({ nombre: e.name, ruta: full, esProyecto: esProyecto(full) });
+  }
+  carpetas.sort((a, b) => a.nombre.localeCompare(b.nombre));
+  return { dir: d, padre: path.dirname(d) === d ? null : path.dirname(d), esProyecto: esProyecto(d), carpetas };
+}
+
+// ---------- HTTP ----------
+const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
+const body = req => new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } }); });
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://x');
+  const q = url.pathname;
+  const p = () => { const pr = proyPorId(url.searchParams.get('p')); if (!pr) throw new Error('No hay proyectos detectados'); return pr; };
+  try {
+    if (req.method === 'GET' && (q === '/' || q === '/index.html')) return servirCliente(res, 'index.html');
+    if (req.method === 'GET' && q.startsWith('/cliente/')) return servirCliente(res, decodeURIComponent(q.slice('/cliente/'.length)));
+    if (req.method === 'GET' && q === '/api/ui') return json(res, 200, leerUi());
+    if (req.method === 'POST' && q === '/api/ui') { const b = await body(req); guardarUi(b); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/proyectos') { descubrir(); PROYECTOS.forEach(sincronizarHistorial); return json(res, 200, { base: BASE, multi: PROYECTOS.length > 1, proyectos: resumenGeneral() }); }
+    if (req.method === 'GET' && q === '/api/estado') return json(res, 200, estadoProyecto(p()));
+    if (req.method === 'GET' && q === '/api/archivo') {
+      const f = url.searchParams.get('f') || '';
+      const r = leerArchivoProyecto(p(), f);
+      if (r.tipo !== 'texto' && /\.(md|sql)$/i.test(f)) return json(res, 400, { error: 'No pude leer ese archivo' });
+      return json(res, 200, r);
+    }
+    if (req.method === 'PUT' && q === '/api/archivo') { const b = await body(req); guardarArchivoProyecto(p(), b.f, b.contenido); descubrir(); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/verificar') return json(res, 200, { items: porVerificar(p()) });
+    if (req.method === 'GET' && q === '/api/verificar/todos') return json(res, 200, { proyectos: PROYECTOS.map(x => ({ id: x.id, nombre: x.nombre, codigo: x.codigo, cliente: x.cliente, items: porVerificar(x, false) })).filter(x => x.items.length) });
+    if (req.method === 'POST' && q === '/api/verificar/marcar') { const b = await body(req); marcarItem(p(), b.file, b.linea, !!b.hecho); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/verificar/cerrar') { const b = await body(req); return json(res, 200, { ok: true, ...cerrarVerificacion(p(), b.id, b) }); }
+    if (req.method === 'POST' && q === '/api/verificar/fallo') { const b = await body(req); reportarFallo(p(), b.id, b.nota); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/cobranza') {
+      const mes = HOY_ISO().slice(0, 7);
+      const decidir = PROYECTOS.flatMap(x => { const P = resumenPuntos(x); if (!P) return []; return porDecidir(x).map(d => ({ ...d, pid: x.id, codigo: x.codigo, nombre: x.nombre, valor: P.valor })); });
+      const regalado = PROYECTOS.reduce((a, x) => { const P = resumenPuntos(x); return a + (P ? P.filas.filter(f => f.tipo === 'Cortesía' && f.nota.includes('Decidido el ' + mes)).reduce((b, f) => b + f.puntos, 0) * P.valor : 0); }, 0);
+      return json(res, 200, { mes, porDecidir: decidir, regaladoMes: Math.round(regalado), proyectos: PROYECTOS.map(x => { const c = resumenCobros(x); return c ? { id: x.id, nombre: x.nombre, codigo: x.codigo, cliente: x.cliente, ...c, filas: undefined, cortes: listaCortes(x) } : null; }).filter(Boolean) });
+    }
+    if (req.method === 'POST' && q === '/api/cobros/crear') { const b = await body(req); return json(res, 200, { ok: true, file: crearCobros(p(), b) }); }
+    if (req.method === 'POST' && q === '/api/cobros/fila') { const b = await body(req); guardarCobro(p(), b); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/nuevo') { const b = await body(req); return json(res, 200, { ok: true, ...crearProyectoNuevo(b) }); }
+    if (req.method === 'POST' && q === '/api/tmn/etapa') { const b = await body(req); if (!ETAPAS.includes(b.etapa)) return json(res, 400, { error: 'Etapa desconocida' }); escribirTmnCrudo(p(), { etapa: b.etapa }); descubrir(); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/biblioteca') {
+      const pr = p(); await asegurarBiblioteca();
+      return json(res, 200, { url: `http://localhost:${PUERTO_BIB}/?raiz=${encodeURIComponent(pr.ruta)}&todos=1` });
+    }
+    if (req.method === 'GET' && q === '/api/carpeta') return json(res, 200, { entradas: listarCarpeta(p(), url.searchParams.get('d') || '.') });
+    if (req.method === 'GET' && q === '/api/raw') {
+      const pr = p(), full = dentro(pr.ruta, url.searchParams.get('f') || '');
+      if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) return json(res, 404, { error: 'No existe' });
+      const ext = path.extname(full).slice(1).toLowerCase();
+      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+      return fs.createReadStream(full).pipe(res);
+    }
+    if (req.method === 'POST' && q === '/api/abrir') { const b = await body(req); abrirEnMac(p(), b); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/tmn/sugerencia') return json(res, 200, { tmn: sugerirTmn(p()) });
+    if (req.method === 'POST' && q === '/api/tmn') { const b = await body(req); const f = guardarTmn(p(), b.tmn || {}); descubrir(); return json(res, 200, { ok: true, file: f }); }
+    if (req.method === 'POST' && q === '/api/tmn/generar') {
+      let n = 0;
+      for (const pr of PROYECTOS) if (!pr.tmnFile) { fs.writeFileSync(path.join(pr.ruta, 'proyecto.tmn'), JSON.stringify(sugerirTmn(pr), null, 2) + '\n'); n++; }
+      descubrir(); return json(res, 200, { ok: true, creados: n });
+    }
+    if (req.method === 'POST' && q === '/api/raices') {
+      const b = await body(req);
+      const lista = (Array.isArray(b.raices) ? b.raices : []).map(x => String(x).trim()).filter(Boolean);
+      CONFIG_BASE.carpetasProyectos = lista; guardarConfigBase(); descubrir();
+      return json(res, 200, { ok: true, raices: lista });
+    }
+    if (req.method === 'POST' && q === '/api/inbox') { const b = await body(req); if (!b.texto?.trim()) return json(res, 400, { error: 'Texto vacío' }); capturarInbox(p(), b.texto); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/changelog/estado') { const b = await body(req); return json(res, 200, { ok: true, cells: actualizarEstado(p(), b.id, b.estado, b.nota) }); }
+    if (req.method === 'POST' && q === '/api/changelog/celda') { const b = await body(req); ponerCelda(p(), b.id, b.col === 'tipo' ? 'tipo' : 'donde', b.valor || ''); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/changelog/columnas') return json(res, 200, { ok: true, agregadas: asegurarColumnas(p()) });
+    if (req.method === 'POST' && q === '/api/mapa') { const b = await body(req); return json(res, 200, { ok: true, file: guardarMapa(p(), b.lugares) }); }
+    if (req.method === 'POST' && q === '/api/config/montos') { const b = await body(req); guardarMontos(p(), b); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/config/etapas') { const b = await body(req); guardarEtapasPlan(p(), b.plan); descubrir(); return json(res, 200, { ok: true }); }
+    if (req.method === 'GET' && q === '/api/historial') return json(res, 200, { eventos: leerJson(histDe(p()), []) });
+    if (req.method === 'GET' && q === '/api/pieza') return json(res, 200, expedientePieza(p(), url.searchParams.get('id') || ''));
+    if (req.method === 'POST' && q === '/api/pieza/comentario') { const b = await body(req); agregarComentario(p(), b.archivo, b.texto, b.sobre); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/pieza/comentario/estado') { const b = await body(req); marcarComentario(p(), b.archivo, b.linea, !!b.atendido); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/pieza/checklist') { const b = await body(req); return json(res, 200, { ok: true, file: crearChecklist(p(), b.id) }); }
+    if (req.method === 'POST' && q === '/api/pieza/spec') {
+      const b = await body(req), pr = p(); const id = String(b.id || '');
+      const lista = archivosMd(pr), a = archivosDeId(lista, id);
+      if (a.specs.length) return json(res, 200, { ok: true, file: a.specs[0] });
+      fs.mkdirSync(path.join(pr.ruta, 'specs'), { recursive: true });
+      const rel = `specs/${id}.md`; fs.writeFileSync(path.join(pr.ruta, rel), PLANTILLA_SPEC(`${id} · ${String(b.titulo || '').trim()}`));
+      return json(res, 200, { ok: true, file: rel });
+    }
+    if (req.method === 'PUT' && q === '/api/checklist') {
+      const b = await body(req), pr = p(); const full = dentro(pr.ruta, b.file || '');
+      if (!full || !full.startsWith(path.join(pr.ruta, 'checklists') + path.sep) || !full.endsWith('.md')) return json(res, 400, { error: 'Solo archivos dentro de /checklists/' });
+      fs.writeFileSync(full, b.contenido ?? ''); return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && q === '/api/puntos/decidir') { const b = await body(req); decidirCobro(p(), b); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/cotizacion') return json(res, 200, { ok: true, ...generarCotizacion(p()) });
+    if (req.method === 'POST' && q === '/api/cotizacion/aceptar') { const r = aceptarCotizacion(p()); descubrir(); return json(res, 200, { ok: true, ...r }); }
+    if (req.method === 'POST' && q === '/api/corte') { const b = await body(req); return json(res, 200, { ok: true, ...generarCorte(p(), b) }); }
+    if (req.method === 'POST' && q === '/api/changelog/nueva') { const b = await body(req); if (!b.descripcion?.trim()) return json(res, 400, { error: 'Falta descripción' }); return json(res, 200, { ok: true, id: agregarFila(p(), b) }); }
+    if (req.method === 'POST' && q === '/api/puntos/crear') { const b = await body(req); return json(res, 200, { ok: true, file: crearPuntos(p(), b) }); }
+    if (req.method === 'POST' && q === '/api/puntos/fila') { const b = await body(req); guardarFilaPuntos(p(), b); return json(res, 200, { ok: true }); }
+    if (req.method === 'PUT' && q === '/api/spec') {
+      const b = await body(req), pr = p();
+      const full = dentro(pr.ruta, b.file || '');
+      if (!full || !full.startsWith(path.join(pr.ruta, 'specs') + path.sep) || !full.endsWith('.md')) return json(res, 400, { error: 'Solo archivos dentro de /specs/' });
+      fs.writeFileSync(full, b.contenido ?? ''); return json(res, 200, { ok: true });
+    }
+    if (req.method === 'POST' && q === '/api/spec/nuevo') {
+      const b = await body(req), pr = p();
+      const slug = (b.nombre || '').trim().toLowerCase().replace(/[^a-z0-9áéíóúñ]+/gi, '-').replace(/^-+|-+$/g, '');
+      if (!slug) return json(res, 400, { error: 'Falta nombre' });
+      fs.mkdirSync(path.join(pr.ruta, 'specs'), { recursive: true });
+      const file = path.join(pr.ruta, 'specs', `${pr.codigo}-${slug}.md`);
+      if (fs.existsSync(file)) return json(res, 400, { error: 'Ya existe un spec con ese nombre' });
+      fs.writeFileSync(file, PLANTILLA_SPEC(b.nombre.trim()));
+      return json(res, 200, { ok: true, file: 'specs/' + path.basename(file) });
+    }
+    if (req.method === 'POST' && q === '/api/sql/aplicado') {
+      const b = await body(req); marcarSqlEntorno(p(), b.rel, b.entorno || 'produccion', !!b.aplicado);
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'GET' && q === '/api/salud') return json(res, 200, saludProyecto(p()));
+    if (req.method === 'GET' && q === '/api/ordenar') return json(res, 200, diagnosticoOrden(p()));
+    if (req.method === 'POST' && q === '/api/ordenar') { const b = await body(req); return json(res, 200, { ok: true, ...ordenarProyecto(p(), b.desde) }); }
+    // --- gestión de Timón y proyectos ---
+    if (req.method === 'GET' && q === '/api/timon') {
+      return json(res, 200, {
+        cobroBase: cobroBase(), valores: PROYECTOS.map(x => { const P = parsePuntos(x); return P ? { id: x.id, nombre: x.nombre, codigo: x.codigo, cliente: x.cliente, valor: P.valor, propio: P.valorPropio } : null; }).filter(Boolean),
+        base: BASE, rutaTimon: RUTA_TIMON, valida: !!(RUTA_TIMON && esTimonValido(RUTA_TIMON)), central: MODO_CENTRAL,
+        raices: (CONFIG_BASE.carpetasProyectos || []).map(r => ({ ruta: r, existe: fs.existsSync(abs(r)) })),
+        sinTmn: PROYECTOS.filter(x => !x.tmnFile).length, version: VERSION_TIMON(),
+        atrasados: PROYECTOS.filter(desactualizado).map(x => ({ id: x.id, nombre: x.nombre, version: x.timonVersion || 'sin versión' })),
+        tieneActualizador: !!(RUTA_TIMON && fs.existsSync(path.join(RUTA_TIMON, 'actualizar-timon.mjs'))),
+        registrados: (CONFIG_BASE.proyectos || []).map(abs),
+        proyectos: PROYECTOS.map(p => ({ id: p.id, nombre: p.nombre, codigo: p.codigo, ruta: p.ruta })),
+        actualizando: act.corriendo,
+      });
+    }
+    if (req.method === 'POST' && q === '/api/timon/cobro') {
+      const b = await body(req);
+      if (num(b.valorPunto) > 0) CONFIG_BASE.valorPunto = num(b.valorPunto);
+      if (b.bolsaPct !== undefined && String(b.bolsaPct).trim() !== '') CONFIG_BASE.bolsaPct = Math.max(0, num(b.bolsaPct));
+      guardarConfigBase();
+      for (const id of (Array.isArray(b.usarBase) ? b.usarBase : [])) { const pr = PROYECTOS.find(x => x.id === id), f = pr && puntosDe(pr); if (f) ponerParam(f, 'Valor del punto', 'Timón'); }
+      return json(res, 200, { ok: true, cobroBase: cobroBase() });
+    }
+    if (req.method === 'POST' && q === '/api/timon/ruta') {
+      const b = await body(req); const d = abs(b.ruta || '');
+      if (!esTimonValido(d)) return json(res, 400, { error: 'Ahí no encuentro plantilla-proyecto-nuevo' });
+      RUTA_TIMON = d; CONFIG_BASE.rutaTimon = d; guardarConfigBase();
+      return json(res, 200, { ok: true, rutaTimon: d });
+    }
+    if (req.method === 'POST' && q === '/api/proyectos/agregar') { const b = await body(req); return json(res, 200, { ok: true, ruta: agregarProyecto(b.ruta) }); }
+    if (req.method === 'POST' && q === '/api/proyectos/quitar') { const b = await body(req); quitarProyecto(b.ruta); return json(res, 200, { ok: true }); }
+    if (req.method === 'POST' && q === '/api/proyectos/incorporar') { const b = await body(req); return json(res, 200, { ok: true, ...incorporarProyecto(b.ruta, b.codigo) }); }
+    if (req.method === 'POST' && q === '/api/timon/actualizar') {
+      const b = await body(req);
+      const rutas = b.todos ? PROYECTOS.map(x => x.ruta) : (b.ids || []).map(id => proyPorId(id)).filter(Boolean).map(x => x.ruta);
+      return json(res, 200, actualizarTimon(rutas, !!b.dry));
+    }
+    if (req.method === 'GET' && q === '/api/timon/logs') {
+      const since = +(url.searchParams.get('since') || 0);
+      return json(res, 200, { corriendo: act.corriendo, fin: act.fin, lines: act.buf.filter(l => l.i >= since), next: act.seq });
+    }
+    if (req.method === 'GET' && q === '/api/explorar') return json(res, 200, explorar(url.searchParams.get('dir')));
+
+    if (req.method === 'POST' && q === '/api/run/start') return json(res, 200, runStart(p(), +(url.searchParams.get('l') || 0)));
+    if (req.method === 'POST' && q === '/api/run/stop') return json(res, 200, runStop(p(), +(url.searchParams.get('l') || 0)));
+    if (req.method === 'GET' && q === '/api/run/logs') {
+      const pr = p(), r = corriendo.get(claveRun(pr.id, url.searchParams.get('l') || 0)), since = +(url.searchParams.get('since') || 0);
+      if (!r) return json(res, 200, { corriendo: false, exit: null, lines: [], next: 0 });
+      return json(res, 200, { corriendo: !!r.proc, exit: r.exit, lines: r.buf.filter(l => l.i >= since), next: r.seq });
+    }
+    json(res, 404, { error: 'No existe ese endpoint' });
+  } catch (e) { json(res, 500, { error: e.message }); }
+});
+
+// ---------- dónde estabas (TMN-012): respaldo del lado del servidor ----------
+// La app de Mac no siempre conserva el almacenamiento del navegador; el panel guarda aquí la ruta, las pestañas y la altura.
+const UI_FILE = path.join(path.dirname(CONFIG_FILE), MODO_CENTRAL ? 'ui.json' : '.timon-ui.json');
+const leerUi = () => { try { return JSON.parse(fs.readFileSync(UI_FILE, 'utf8')) || {}; } catch { return {}; } };
+function guardarUi(cambios) {
+  const ui = { ...leerUi() };
+  for (const [k, v] of Object.entries(cambios || {})) if (/^timon\.[a-zA-Z]+$/.test(k)) ui[k] = v;
+  try { fs.mkdirSync(path.dirname(UI_FILE), { recursive: true }); fs.writeFileSync(UI_FILE, JSON.stringify(ui)); } catch { }
+}
+
+// ---------- UI (TMN-038): la interfaz vive en ./cliente/ ----------
+const CLIENTE = path.join(SCRIPT_DIR, 'cliente');
+const MIME_CLIENTE = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png', json: 'application/json; charset=utf-8' };
+function servirCliente(res, rel) {
+  const full = dentro(CLIENTE, rel);
+  if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('No existe'); }
+  const ext = path.extname(full).slice(1).toLowerCase();
+  res.writeHead(200, { 'Content-Type': MIME_CLIENTE[ext] || 'application/octet-stream', 'Cache-Control': ext === 'woff2' ? 'max-age=31536000' : 'no-cache' });
+  fs.createReadStream(full).pipe(res);
+}
+
+// ---------- arranque ----------
+descubrir();
+function listen(puerto, intentos = 0) {
+  server.once('error', err => {
+    if (err.code === 'EADDRINUSE' && intentos < 10 && !process.env.TIMON_APP) { console.log(`Puerto ${puerto} ocupado, probando ${puerto + 1}…`); listen(puerto + 1, intentos + 1); }
+    else { console.error('No pude arrancar el panel:', err.message); process.exit(1); }
+  });
+  server.listen(puerto, '127.0.0.1', () => {
+    const url = `http://localhost:${puerto}`;
+    console.log(`\n  🧭 Panel Timón`);
+    console.log(MODO_CENTRAL ? `  Modo central · carpetas: ${(CONFIG_BASE.carpetasProyectos || []).join(', ')}` : `  Carpeta base: ${BASE}`);
+    console.log(`  Proyectos detectados: ${PROYECTOS.length}${PROYECTOS.length ? ' — ' + PROYECTOS.map(p => p.nombre).join(', ') : ''}`);
+    console.log(`  Abierto en ${url}  (Ctrl+C para cerrar)\n`);
+    if (process.env.TIMON_APP) return; // dentro de Timón.app: la ventana nativa ya lo muestra
+    try {
+      const abrir = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+      spawn(abrir, [url], { shell: process.platform === 'win32', stdio: 'ignore', detached: true }).unref();
+    } catch { }
+  });
+}
+listen(CONFIG_BASE.puerto);
+function apagar() {
+  for (const r of corriendo.values()) if (r.proc) { try { process.kill(-r.proc.pid, 'SIGTERM'); } catch { try { r.proc.kill('SIGTERM'); } catch { } } }
+  if (procBib) { try { procBib.kill('SIGTERM'); } catch { } }
+  setTimeout(() => process.exit(0), 300);
+}
+process.on('SIGINT', apagar);
+process.on('SIGTERM', apagar);
+// Si Timón.app se cierra a la fuerza, el panel se apaga solo (y con él lo que lanzó).
+if (process.env.TIMON_APP_PID) setInterval(() => { try { process.kill(+process.env.TIMON_APP_PID, 0); } catch { apagar(); } }, 3000);

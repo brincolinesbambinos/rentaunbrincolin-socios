@@ -25,18 +25,27 @@ Cada campo de ruta trae un botón **📂 Buscar…** que abre un explorador de c
 
 El botón **Quitar** solo saca al proyecto de la lista del panel; no borra ningún archivo.
 
-## Vista general (modo multi)
+## Inicio: Hoy y proyectos
 
-La pantalla de inicio: una tarjeta por proyecto con sus contadores (✅ sin verificar, 🔄 en construcción, 🔲 pendientes, 📥 inbox sin procesar, 🗄️ SQL pendientes), punto verde si está corriendo, y arriba los totales cruzados. De un vistazo ves dónde se te está acumulando trabajo sin cerrar — que es justo el punto ciego que las reglas 17-19 atacan. Clic en cualquier tarjeta para entrar; el selector del encabezado cambia de proyecto sin volver al inicio.
+Arriba, **Hoy te toca**: hasta 5 tarjetas por urgencia en todos los proyectos (pago vencido, pieza que falló, piezas por probar, cobros por decidir, pago en los próximos 7 días, ideas acumuladas, proyecto en Construcción sin moverse). Clic y llegas a la acción. Abajo, lo que está corriendo y las tarjetas de proyectos agrupadas por cliente, con su etapa.
+
+- **⌘K Buscar y hacer:** proyectos, piezas (por ID o texto), ideas y acciones ("nueva pieza en RB", "arrancar PartyBot", "cobro de Idea", "probar RB-295").
+- **Calendario:** todos los proyectos por etapa, lo planeado contra lo real, los pagos y la carga de proyectos en construcción por mes.
+- **⌘N Proyecto:** empezar uno de cero o traer uno empezado (diagnóstico, kit sin pisar nada y cada corrección como pieza Interno).
 
 ## Dentro de un proyecto
 
-- **Tablero** — contadores + alertas de las reglas 17-19, captura rápida al inbox, y el changelog completo con cambio de estado por fila. Marcar ✔️ Verificado pide confirmación de que TÚ corriste el checklist; marcar 🔄 avisa si ya hay frentes abiertos (regla 18); 🚫 pide la nota de por qué se descarta.
-- **Inbox** — el INBOX rendereado + captura rápida (si el proyecto no tiene inbox, se crea con la primera captura).
-- **Specs** — lista con su estado; ver rendereado, editar y guardar, o crear uno nuevo desde la plantilla estándar.
-- **SQL** — lista los `.sql` del proyecto, los muestra y los copia con un botón para pegarlos en Supabase/tu editor de BD. El check de "aplicado" es tu registro personal. **El panel no ejecuta SQL contra ninguna base — a propósito (v1 segura).**
-- **Docs** — los `.md` de la raíz (Marco, Arquitectura, Memoria…) rendereados, solo lectura.
-- **▶ Correr** — arranca/detiene el comando del proyecto con logs en vivo, sin ventana de terminal. **Puedes tener varios proyectos corriendo a la vez** — cada uno con sus propios logs, y el punto verde en la vista general te dice cuáles están arriba.
+Siete secciones; lo demás vive como subpestaña:
+
+- **Resumen** — "Lo que sigue" (un botón con la siguiente acción), etapas, contadores, avisos, por módulo y actividad reciente. Subpestañas **Etapas en el tiempo** (plan contra real y proyección al ritmo actual) y **Piezas en el tiempo** (cuánto pasó cada pieza en cada estado).
+- **Piezas** — Lista, Por lugar (mapa) y Tabla (el changelog de siempre, con cambio de estado por fila). Cada pieza abre su expediente.
+- **Ideas** — el INBOX en tarjetas: anotar, promover a pieza, descartar. El archivo no se borra nunca.
+- **Probar** — sesión de verificación, una pieza a la vez.
+- **Cobro** — contrato, pagos, iguala, Por decidir, por módulo, cortes y Puntos.
+- **Taller** — Archivos (árbol y visor dentro de Timón, edición a mano con respaldo), Corregir textos (buscar y reemplazar una frase en todo el proyecto, sin IA), SQL, Documentos, Specs y Ordenar y salud. Los botones "Abrir en el editor" abren VS Code o Cursor en la línea exacta (se elige en Ajustes).
+- **Configuración** — ficha, montos, módulos, fechas planeadas y lanzadores.
+
+La barra del proyecto tiene Abrir, Arrancar o Detener, Finder, Terminal, **Consola** (los logs abajo, sin salir de donde estás) y **+ Pieza**. **El panel no ejecuta SQL contra ninguna base, a propósito.**
 
 ## Configuración (`timon.config.json`)
 
@@ -72,3 +81,64 @@ En modo multi, el panel guarda su propio `timon.config.json` junto a él (lo esc
 - Si una IA edita un archivo mientras lo tienes abierto en el editor de specs, gana el último que guarde. Las demás vistas se refrescan cada 20 segundos.
 - Ejecutar SQL directo contra la base quedó explícitamente fuera de alcance de esta versión.
 - Los procesos que arrancas mueren cuando cierras el panel (Ctrl+C los detiene a todos).
+
+## Pestaña 💰 Puntos
+
+Lee `PUNTOS-[CODIGO].md` en la raíz de cada proyecto (lo crea el skill `cotizar-proyecto` o el botón "Crear registro" de la pestaña). Muestra:
+
+- **Contratado usado:** puntos registrados como Contratado contra los puntos de la cotización.
+- **Cortesía usada:** lo regalado contra la bolsa de cortesía. Avisa al 80% y al agotarse.
+- **Extras por cobrar:** puntos tipo Extra sin cobrar, en pesos con el valor del punto. Botón "Marcar cobrado".
+- **Garantía:** correcciones, solo informativo.
+- **Sin clasificar:** solicitudes del changelog que todavía no tienen tipo ni puntos, para clasificarlas ahí mismo.
+
+En la vista general, cada proyecto con registro muestra lo que hay por cobrar, la cortesía restante y el % de lo contratado.
+
+## Panel central y fichas `.tmn`
+
+Un solo panel para todos tus proyectos, sin entrar a cada carpeta. Se abre con doble clic en **`Panel Timón.command`** (en `Downloads/Sistemas`) o con:
+
+```
+node timon-panel.mjs --central
+```
+
+- Busca proyectos en las carpetas raíz (por defecto `~/Downloads/Plataformas`, `~/Developer` y `~/Downloads/Sistemas`), hasta 5 niveles adentro. Las carpetas se cambian en la pestaña **⚙ Timón**.
+- Un proyecto aparece si tiene una ficha `.tmn`, un `CHANGELOG-*.md` o un `00-MARCO.md`.
+- La configuración del panel central vive en `~/.timon/panel.json`. Abre en `http://localhost:4400`.
+
+### Qué hace
+
+- **Vista general** agrupada por cliente, con buscador y filtro por estado. Cada tarjeta trae ▶ para lanzar, 🌐 para abrir la URL y 📁 para abrir la carpeta en Finder.
+- **▶ Correr:** varios lanzadores por proyecto, cada uno con sus logs. Pueden correr varios proyectos a la vez.
+- **📁 Archivos:** explorador de la carpeta del proyecto, visor de Markdown, imágenes y PDF, y editor de archivos de texto. Botones para mostrar en Finder, abrir con su app o abrir una Terminal ahí.
+- **⚙ Proyecto:** edita la ficha `.tmn` (nombre, cliente, marca, estado, color, lanzadores, ligas, proyectos relacionados). "Sugerir desde el proyecto" la arma con lo que detecta en la carpeta.
+
+### Formato `.tmn`
+
+Un JSON en la raíz del proyecto, normalmente `proyecto.tmn`:
+
+```json
+{
+  "timon": 1,
+  "nombre": "Renta un Brincolín",
+  "codigo": "RB",
+  "cliente": "Brincolines Bambinos",
+  "marca": "Midnite Atelier",
+  "estado": "activo",
+  "color": "#ff7a59",
+  "descripcion": "Backoffice de rentas multi-sucursal",
+  "lanzadores": [
+    { "nombre": "Desarrollo", "comando": "npm run dev -- -p 4002", "carpeta": ".", "url": "http://localhost:4002" }
+  ],
+  "ligas": [ { "nombre": "Producción", "url": "https://…" } ],
+  "relacionados": ["BB", "PTB"]
+}
+```
+
+- `estado`: `activo`, `pausado`, `entregado` o `idea`.
+- `lanzadores[].comando` corre en la `carpeta` indicada (relativa al proyecto). Sirve cualquier cosa que corra en Terminal: `npm run dev`, `zsh "./App.command"`, `open index.html`, `node server.mjs`.
+- `relacionados`: códigos de otros proyectos; en ⚙ Proyecto aparecen como accesos directos.
+
+## Dónde vive la interfaz
+
+Desde la versión 2026.10.21.3 la interfaz está en `cliente/` (junto a `timon-panel.mjs`). El servidor solo la sirve. Detalle de cada archivo en `cliente/LEEME.md`.

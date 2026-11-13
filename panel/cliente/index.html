@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Timón</title>
+<link rel="icon" href="/cliente/brujula.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/cliente/estilos.css">
+</head>
+<body class="general sin-rail">
+<header class="top">
+  <div class="top-fila">
+    <button class="logo" onclick="irGeneral()" aria-label="Ir a Hoy"><svg width="28" height="28" viewBox="0 0 86 86" aria-hidden="true"><circle cx="43" cy="43" r="38" fill="none" stroke="#EEF2F7" stroke-width="6"></circle><path d="M43 8L50 43L43 78L36 43Z" fill="#EEF2F7"></path><path d="M8 43L43 36L78 43L43 50Z" fill="#FF7A1A"></path></svg><span>TIMÓN</span></button>
+    <div class="hist"><button onclick="atras()" aria-label="Atrás" title="Atrás (⌘[)"><span data-ic="anterior"></span></button><button onclick="adelante()" aria-label="Adelante" title="Adelante (⌘])"><span data-ic="siguiente"></span></button></div>
+    <div class="ruta" id="ruta"></div>
+    <label class="buscar" for="gBuscar"><span data-ic="buscar" data-sz="16"></span><input id="gBuscar" type="text" placeholder="Buscar y hacer" onclick="abrirPaleta()" readonly><kbd>⌘K</kbd></label>
+    <button class="nuevo-top" onclick="irNuevo()"><span data-ic="nuevo" data-sz="16"></span>Proyecto <kbd>⌘N</kbd></button>
+    <select class="proy" id="selProy" onchange="elegirProyecto(this.value)" aria-label="Cambiar de proyecto"></select>
+  </div>
+  <div class="tabs" id="tabs" aria-label="Proyectos abiertos" style="display:none"></div>
+</header>
+<div class="marco">
+  <aside id="side" aria-label="Navegación"></aside>
+  <div class="principal">
+    <div id="banner"></div>
+    <div class="cuerpo"><main id="main">Cargando…</main></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script src="/cliente/iconos.js"></script>
+<script src="/cliente/nucleo.js"></script>
+<script src="/cliente/general.js"></script>
+<script src="/cliente/proyecto.js"></script>
+<script src="/cliente/vistas.js"></script>
+<script src="/cliente/rutas.js"></script>
+<script src="/cliente/salud-sql.js"></script>
+<script src="/cliente/mapa-config.js"></script>
+<script src="/cliente/piezas.js"></script>
+<script src="/cliente/carriles.js"></script>
+<script src="/cliente/cobro.js"></script>
+<script src="/cliente/resumen.js"></script>
+<script src="/cliente/inicio.js"></script>
+<script src="/cliente/faltan.js"></script>
+<script src="/cliente/ideas.js"></script>
+<script src="/cliente/buscar.js"></script>
+<script src="/cliente/nuevo.js"></script>
+<script src="/cliente/taller.js"></script>
+<script src="/cliente/tiempo.js"></script>
+<script src="/cliente/metricas.js"></script>
+<script src="/cliente/markdown.js"></script>
+<script src="/cliente/arranque.js"></script>
+</body>
+</html>
